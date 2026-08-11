@@ -33,15 +33,19 @@ class RosettaCLI(LoggingMixin):
         batch_max_paths: int = 14,
         max_paths_per_day: int = 18,
         state_dir: Path | None = None,
-    ):
+        headless: bool | None = None,
+    ) -> dict:
         """
         Run a hierarchical learning session following Course → Lesson → Activity flow.
         This follows the proper Rosetta Stone hierarchy.
+
+        Returns the captured session data, so callers (the web UI) can tell which
+        account the run belonged to and locate its state file.
         """
         browser_settings = get_settings().browser_settings
 
         provider = PlaywrightBrowserProvider(
-            headless=browser_settings.headless,
+            headless=browser_settings.headless if headless is None else headless,
             slow_mo=browser_settings.slow_mo,
             user_agent=browser_settings.user_agent,
             locale=browser_settings.locale,
@@ -96,6 +100,7 @@ class RosettaCLI(LoggingMixin):
                     await complete_foundations.execute(captured_data)
 
                 self.logger.info("Learning session finished successfully")
+                return captured_data
 
         finally:
             await provider.stop()

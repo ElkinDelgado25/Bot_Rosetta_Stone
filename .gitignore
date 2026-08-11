@@ -19,5 +19,9 @@ logs/
 # "state" trackable (for example, infrastructure/state/).
 /state/
 
+# Perfiles de la UI web: contienen credenciales en texto plano.
+/profiles.json
+/data/
+
 # Local AI assistant settings
 .claude/settings.local.json

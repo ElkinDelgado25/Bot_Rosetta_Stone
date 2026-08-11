@@ -1,0 +1,27 @@
+services:
+  rosetta-web:
+    build: .
+    image: rosseta-script-a:latest
+    container_name: rosetta-web
+    restart: unless-stopped
+
+    ports:
+      # Publicado solo en loopback. Cambiar a "8000:8000" lo expone a toda la
+      # red local, y la API puede lanzar corridas con las credenciales
+      # guardadas: hazlo únicamente con ROSETTA_WEB_TOKEN definido.
+      - "127.0.0.1:8000:8000"
+
+    environment:
+      # Token compartido de la UI. Sin él la API queda abierta a quien alcance
+      # el puerto. Defínelo en un archivo .env junto a este compose.
+      ROSETTA_WEB_TOKEN: ${ROSETTA_WEB_TOKEN:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+    volumes:
+      # .env, profiles.json, state/ y logs/ viven aquí. Es lo único que hay que
+      # respaldar; sin este volumen se pierde el progreso entre reinicios.
+      - ./data:/data
+
+    # Chromium agota los 64 MB de /dev/shm que Docker da por defecto. El código
+    # ya pasa --disable-dev-shm-usage, así que esto es un margen extra.
+    shm_size: "512mb"

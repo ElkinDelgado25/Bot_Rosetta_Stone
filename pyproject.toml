@@ -11,16 +11,27 @@ dependencies = [
     "pydantic-settings>=2.12.0",
 ]
 
+[project.optional-dependencies]
+# La UI web es opcional: el .exe de PyInstaller no la necesita y no debe
+# arrastrar FastAPI/uvicorn. Instalar con `uv sync --extra web`.
+web = [
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+]
+
 [project.urls]
 Repository = "https://github.com/ElkinDelgado25/Bot_Rosetta_Stone"
 
 [project.scripts]
 rosseta-script-a = "rosseta_stone_script_a.__main__:main"
+rosseta-web = "rosseta_stone_script_a.presentation.web.server:main"
 
 [dependency-groups]
 dev = [
     "pyinstaller>=6.0",
     "pytest>=9.1.1",
+    # Requerido por starlette.testclient para probar la capa web.
+    "httpx>=0.28",
 ]
 
 [build-system]
@@ -34,6 +45,10 @@ package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# El HTML de la UI no es código: sin esto no viaja en una instalación del paquete.
+[tool.setuptools.package-data]
+"rosseta_stone_script_a.presentation.web" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

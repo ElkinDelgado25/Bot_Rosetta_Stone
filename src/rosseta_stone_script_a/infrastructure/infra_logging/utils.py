@@ -1,10 +1,17 @@
 # infrastructure/logging/utils.py
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
 def detect_project_root() -> Path:
+    # ROSETTA_HOME wins so logs land in the container's data volume instead of
+    # next to the source tree, which is read-only for a non-root user.
+    override = os.getenv("ROSETTA_HOME", "").strip()
+    if override:
+        return Path(override)
+
     here = Path(__file__).resolve()
     for p in here.parents:
         if any(

@@ -60,7 +60,10 @@ class PlaywrightBrowserProvider(BrowserProviderPort, LoggingMixin):
         # msedge (always present on Windows) -> Playwright's bundled Chromium.
         import os
 
-        preferred = os.getenv("BROWSER_CHANNEL", "chrome")
+        # An empty BROWSER_CHANNEL means "no channel": go straight to the
+        # bundled Chromium. That is what a Linux container wants, where neither
+        # Chrome nor Edge exists and trying them just costs two failed launches.
+        preferred = os.getenv("BROWSER_CHANNEL", "chrome").strip() or None
         channels: list[str | None] = []
         for ch in (preferred, "msedge", None):
             if ch not in channels:

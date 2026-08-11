@@ -1,0 +1,32 @@
+# Entorno y artefactos locales
+.venv/
+build/
+dist/
+wheels/
+*.egg-info/
+__pycache__/
+*.py[oc]
+.pytest_cache/
+
+# Datos y secretos: nunca deben viajar en la imagen
+.env
+profiles.json
+data/
+state/
+logs/
+debug/
+
+# Control de versiones y herramientas
+.git/
+.github/
+.vscode/
+.claude/
+.agents/
+
+# Tests y docs: no hacen falta en runtime
+tests/
+docs/
+*.md
+!README.md
+build.py
+rosseta-script-a.spec

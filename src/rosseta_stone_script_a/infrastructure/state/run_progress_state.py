@@ -99,3 +99,7 @@ class RunProgressState:
     def touch_last_run(self) -> None:
         """Record the current timestamp as the last run time."""
         self._data["last_run"] = datetime.utcnow().isoformat() + "Z"
+
+    def last_run(self) -> str | None:
+        """Return the ISO timestamp of the last run, or None if it never ran."""
+        return self._data.get("last_run")

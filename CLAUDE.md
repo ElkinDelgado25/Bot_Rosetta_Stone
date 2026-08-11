@@ -212,9 +212,14 @@ copia privada. Verifica con `(Get-Item ruta).Target`.
 
 ## Alcance
 
+
 Trabajo que se complementa corresponde en este repo: empaquetado, entorno, build del `.exe`,
 tests, logging, códigos de salida, mensajes de error, refactors y documentación.
 
 Lo que hacer inmediatamente es : extender el mecanismo de completación fabricada a productos nuevos
 (Fluency Builder u otros), Se tiene que trabajar en hacer que los envíos sean más difíciles
 de distinguir de actividad real.
+
+Para el futuro, se puede pensar en crearle una cli usando docker tambien, sera necesario consulta que tiene y em base a eso tener que hacer un plan de trabajo para poder hacer que el bot sea más robusto y pueda soportar cambios en la plataforma de Rosetta Stone. 
+
+
