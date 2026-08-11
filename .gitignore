@@ -1,0 +1,23 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+
+# Virtual environments
+.venv
+.env
+
+# Debug and logs
+debug/
+logs/
+
+# Runtime state generated at the repository root. Keep source packages named
+# "state" trackable (for example, infrastructure/state/).
+/state/
+
+# Local AI assistant settings
+.claude/settings.local.json

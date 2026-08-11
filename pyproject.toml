@@ -1,0 +1,40 @@
+[project]
+name = "rosseta-stone-script-a"
+version = "0.1.0"
+description = "Automatiza la navegación y finalización de lecciones en Rosetta Stone, con reportes de avance y cálculo de rutas óptimas de aprendizaje."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14"
+dependencies = [
+    "playwright>=1.56.0",
+    "pydantic>=2.12.4",
+    "pydantic-settings>=2.12.0",
+]
+
+[project.urls]
+Repository = "https://github.com/ElkinDelgado25/Bot_Rosetta_Stone"
+
+[project.scripts]
+rosseta-script-a = "rosseta_stone_script_a.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.0",
+    "pytest>=9.1.1",
+]
+
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# El código vive en src/ (src layout): sin esto setuptools depende de la
+# autodetección, que también puede recoger el .egg-info o carpetas de la raíz.
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
