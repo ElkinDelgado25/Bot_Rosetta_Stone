@@ -1,0 +1,100 @@
+"""Tests for FluencyProgressBuilder — message fabrication per step type."""
+
+from rosseta_stone_script_a.application.services.fluency_progress_builder import (
+    FluencyProgressBuilder,
+)
+from rosseta_stone_script_a.domain.entities.fluency_activity import FluencyActivity
+from rosseta_stone_script_a.domain.entities.fluency_sequence import FluencySequence
+from rosseta_stone_script_a.domain.entities.fluency_step import FluencyStep
+
+
+def _sequence(steps):
+    activity = FluencyActivity(
+        activity_id="act-1",
+        activity_type="Mixed",
+        interaction="practice",
+        ordering="tree",
+        steps=steps,
+    )
+    return (
+        FluencySequence(
+            sequence_id="seq-1",
+            course_id="course-1",
+            title="Lesson",
+            version=3,
+            activities=[activity],
+        ),
+        activity,
+    )
+
+
+class TestFluencyProgressBuilder:
+    def test_one_message_per_step(self):
+        seq, act = _sequence(
+            [
+                FluencyStep("s1", "multipleChoice", ["a", "b"]),
+                FluencyStep("s2", "card", []),
+            ]
+        )
+        msgs = FluencyProgressBuilder().build_activity_messages(seq, act)
+        assert len(msgs) == 2
+        assert {m["activityStepId"] for m in msgs} == {"s1", "s2"}
+
+    def test_shared_activity_attempt_id_unique_step_attempt_ids(self):
+        seq, act = _sequence(
+            [FluencyStep("s1", "cloze", ["a"]), FluencyStep("s2", "cloze", ["b"])]
+        )
+        msgs = FluencyProgressBuilder().build_activity_messages(seq, act)
+        assert msgs[0]["activityAttemptId"] == msgs[1]["activityAttemptId"]
+        assert msgs[0]["activityStepAttemptId"] != msgs[1]["activityStepAttemptId"]
+
+    def test_carries_sequence_identity_and_version(self):
+        seq, act = _sequence([FluencyStep("s1", "card", [])])
+        m = FluencyProgressBuilder().build_activity_messages(seq, act)[0]
+        assert m["courseId"] == "course-1"
+        assert m["sequenceId"] == "seq-1"
+        assert m["activityId"] == "act-1"
+        assert m["version"] == 3
+
+    def test_multiplechoice_sends_one_correct_id(self):
+        seq, act = _sequence([FluencyStep("s1", "multipleChoice", ["x", "y", "z"])])
+        m = FluencyProgressBuilder().build_activity_messages(seq, act)[0]
+        assert m["answers"] == [{"answer": "x", "correct": True}]
+        assert m["score"] == 1
+
+    def test_cloze_maps_each_correct_id_positionally(self):
+        seq, act = _sequence([FluencyStep("s1", "cloze", ["a", "b", "c"])])
+        m = FluencyProgressBuilder().build_activity_messages(seq, act)[0]
+        assert m["answers"] == [
+            {"answer": "a", "correct": True},
+            {"answer": "b", "correct": True},
+            {"answer": "c", "correct": True},
+        ]
+        assert m["score"] == 1
+
+    def test_matching_sends_each_pair(self):
+        seq, act = _sequence([FluencyStep("s1", "matching", ["l1:r1", "l2:r2"])])
+        m = FluencyProgressBuilder().build_activity_messages(seq, act)[0]
+        assert m["answers"] == [
+            {"answer": "l1:r1", "correct": True},
+            {"answer": "l2:r2", "correct": True},
+        ]
+
+    def test_card_has_empty_answers_and_full_score(self):
+        seq, act = _sequence([FluencyStep("s1", "card", [])])
+        m = FluencyProgressBuilder().build_activity_messages(seq, act)[0]
+        assert m["answers"] == []
+        assert m["score"] == 1
+
+    def test_step_without_id_is_skipped(self):
+        seq, act = _sequence(
+            [FluencyStep(None, "card", []), FluencyStep("s2", "card", [])]
+        )
+        msgs = FluencyProgressBuilder().build_activity_messages(seq, act)
+        assert [m["activityStepId"] for m in msgs] == ["s2"]
+
+    def test_endtimestamp_is_utc_z(self):
+        seq, act = _sequence([FluencyStep("s1", "card", [])])
+        m = FluencyProgressBuilder().build_activity_messages(seq, act)[0]
+        assert m["endTimestamp"].endswith("Z")
+        assert m["skip"] is False
