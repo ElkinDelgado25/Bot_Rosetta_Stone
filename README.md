@@ -1,103 +1,247 @@
 # Rosseta-Stone-Script-A
 
-Rosseta-Stone-Script-A es una herramienta automatizada diseñada para interactuar con la plataforma Rosetta Stone, facilitando el avance y la finalización de lecciones de idiomas de manera eficiente. El proyecto permite gestionar sesiones, analizar el progreso, generar reportes y optimizar el camino de aprendizaje para usuarios de Rosetta Stone.
+Bot que marca lecciones de Rosetta Stone como completadas. No las resuelve:
+obtiene el árbol del curso desde la propia plataforma, fabrica puntaje y
+duración a partir de los metadatos que ella misma declara, y los envía al
+endpoint de seguimiento.
 
-## ¿Qué hace?
+Soporta los dos productos: **Foundations** y **Fluency Builder**. Cada uno usa
+su propio backend y modelo de contenido; el bot detecta cuál tiene la cuenta.
 
-- Automatiza la navegación y finalización de lecciones en Rosetta Stone.
-- Captura y analiza el historial de sesiones de usuario.
-- Genera reportes de avance y recomendaciones personalizadas.
-- Filtra contenido y calcula rutas óptimas de aprendizaje.
-- Permite la integración con APIs y adaptadores para ampliar funcionalidades.
+Hay dos formas de usarlo:
 
-## ¿Cómo funciona?
+| | Para qué | Cuántas cuentas |
+|---|---|---|
+| **CLI** | Una pasada, desde la terminal | Una, la del `.env` |
+| **Interfaz web** | Gestionar usuarios y lanzarlos desde el navegador | Varias, cada una con lo suyo |
 
-El proyecto está estructurado en módulos que separan la lógica de negocio, la infraestructura, la presentación y el dominio. Utiliza orquestadores para coordinar el flujo de trabajo, servicios para procesar datos y adaptadores para interactuar con fuentes externas (como la API de Rosetta Stone).
+---
 
-### Estructura principal
+## Requisitos
 
-- `src/rosseta_stone_script_a/application/`: Orquestadores, puertos y servicios.
-- `src/rosseta_stone_script_a/domain/`: Entidades, valores y constantes del dominio.
-- `src/rosseta_stone_script_a/infrastructure/`: Adaptadores y configuración.
-- `src/rosseta_stone_script_a/presentation/`: CLI y dependencias.
-- `logs/`: Registro de sesiones, errores y reportes.
+- **Python >= 3.14**. No hay `requirements.txt`: las dependencias están en
+  `pyproject.toml` y fijadas en `uv.lock`.
+- [**uv**](https://docs.astral.sh/uv/). Si no lo tienes:
 
-### Flujo básico
+  ```bash
+  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+  ```
 
-1. El usuario inicia el script desde la CLI.
-2. Se capturan las credenciales y preferencias.
-3. El orquestador coordina la interacción con la plataforma.
-4. Se procesan los datos de avance y se generan reportes.
-5. Los resultados se almacenan en logs y pueden ser consultados o exportados.
+- Un navegador **Chrome o Edge** instalado (lo normal en Windows). El bot usa el
+  del sistema; si no encuentra ninguno, cae al Chromium que trae Playwright.
+- **Docker Desktop**, solo si vas a usar la interfaz web en contenedores.
 
-## Instalación
+---
 
-1. Clona el repositorio:
- ```bash
- git clone https://github.com/ElkinDelgado25/Bot_Rosetta_Stone.git
- ```
+## Puesta en marcha
 
-2. Instala las dependencias. El proyecto usa [uv](https://docs.astral.sh/uv/) y
-   requiere **Python >= 3.14** (no hay `requirements.txt`; las dependencias viven
-   en `pyproject.toml` y están fijadas en `uv.lock`):
+```bash
+git clone https://github.com/ElkinDelgado25/Bot_Rosetta_Stone.git
+cd Bot_Rosetta_Stone
+uv sync --extra web
+```
 
- ```bash
- uv sync
- ```
+`--extra web` añade FastAPI y el cliente de Docker. Si solo vas a usar la CLI,
+`uv sync` a secas es suficiente.
 
- Si no tienes `uv`, instálalo con:
+Si no tienes Chrome ni Edge (típico en Linux), instala el navegador de
+Playwright una vez:
 
- ```bash
- powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
- ```
+```bash
+uv run playwright install chromium
+```
 
-3. Copia `.env.example` a `.env` y ajusta las credenciales y preferencias.
+---
 
-## Uso
+## Opción A · Interfaz web en Docker (recomendada)
 
-Ejecuta el script principal:
+Es la forma completa: gestionas varios usuarios desde el navegador y **cada uno
+corre en su propio contenedor**, todos a la vez.
+
+```bash
+docker compose up -d --build --force-recreate
+```
+
+Abre <http://127.0.0.1:8000>.
+
+> **`--force-recreate` no sobra.** `--build` reconstruye la imagen pero deja
+> corriendo el contenedor viejo, así que verías el código anterior sin entender
+> por qué. Úsalo siempre que hayas tocado el código.
+
+En Linux, el contenedor necesita el grupo del socket de Docker:
+
+```bash
+DOCKER_GID=$(getent group docker | cut -d: -f3) docker compose up -d --build --force-recreate
+```
+
+Comandos útiles:
+
+```bash
+docker compose logs -f rosetta-web
+```
+
+```bash
+docker compose down
+```
+
+Todo el estado vive en `./data` (`profiles.json`, `state/`, `logs/`). Es la
+única carpeta que hay que respaldar; si la borras, se pierde el progreso.
+
+### Cómo usarla
+
+1. **+ Nuevo usuario** → correo y contraseña de Rosetta Stone. Nada más: el
+   resto lo averigua el bot solo.
+2. Al guardar se **verifica automáticamente**: inicia sesión, pasa por la
+   selección institucional si aparece, y detecta si la cuenta usa Foundations o
+   Fluency Builder. **No envía nada.**
+3. La ficha muestra el producto detectado y si la ruta institucional apareció.
+4. **Ejecutar** lanza el ciclo completo. El registro en vivo y la tabla de
+   avance por lección muestran cómo va.
+
+Los botones **Verificar** y **Ejecutar** son distintos a propósito: Verificar
+solo comprueba que la cuenta entra, Ejecutar sí modifica el progreso real.
+
+Repite por cada cuenta. Todas pueden correr a la vez, cada una aislada en su
+contenedor: si un navegador se cuelga, se lleva solo el suyo.
+
+---
+
+## Opción B · Interfaz web en local, sin Docker
+
+```bash
+uv run rosseta-web
+```
+
+Igual que la anterior, en <http://127.0.0.1:8000>, pero **sin aislamiento**: las
+corridas comparten navegador y archivo de estado, así que se ejecutan **de una
+en una** y las demás esperan en cola con su posición.
+
+`GET /api/health` dice en qué modo está:
+
+```bash
+curl http://127.0.0.1:8000/api/health
+```
+
+`"backend":"docker"` = un contenedor por usuario, en paralelo.
+`"backend":"in-process"` = todo en este proceso, en cola.
+
+---
+
+## Opción C · CLI, una sola cuenta
 
 ```bash
 uv run python -m rosseta_stone_script_a
 ```
 
-Si prefieres no usar `uv`, activa el entorno creado por `uv sync` y ejecuta el
-módulo directamente:
+Lee todo del `.env`. Si no existe, la primera ejecución lo crea preguntando
+correo y contraseña. Usa `.env.example` como plantilla para el resto de
+opciones.
+
+Sin `uv`, con el entorno ya sincronizado:
 
 ```bash
 .\.venv\Scripts\python.exe -m rosseta_stone_script_a
 ```
 
-Puedes personalizar el comportamiento mediante argumentos CLI o modificando el `.env`.
+**Códigos de salida** (útiles si lo programas en una tarea automática):
 
-## Compilar el .exe
+| Código | Significa |
+|---|---|
+| `0` | Todo bien |
+| `1` | Error |
+| `3` | La sesión no se capturó completa: **no se envió nada**, normalmente falló el login |
+| `130` | Interrumpido con Ctrl+C |
+
+---
+
+## Variables de entorno
+
+Van en el `.env` (o en el `environment:` del compose).
+
+| Variable | Por defecto | Para qué |
+|---|---|---|
+| `ROSETTA_EMAIL` / `ROSETTA_PASSWORD` | — | Credenciales de la CLI |
+| `ROSETTA_HOME` | directorio actual | Dónde viven `.env`, `profiles.json`, `state/` y `logs/` |
+| `ROSETTA_WEB_HOST` | `127.0.0.1` | Interfaz donde escucha la web |
+| `ROSETTA_WEB_PORT` | `8000` | Puerto |
+| `ROSETTA_WEB_TOKEN` | *(vacío)* | Token compartido. Vacío = API abierta |
+| `ROSETTA_RUN_BACKEND` | automático | `docker` o `in-process`, para forzar el modo |
+| `BROWSER_HEADLESS` | `false` | `true` para no ver la ventana del navegador |
+| `LOG_LEVEL` | `INFO` | `DEBUG` para diagnosticar |
+
+---
+
+## Seguridad
+
+**Las contraseñas se guardan en texto plano** en `profiles.json`, igual que en
+el `.env`. El archivo se escribe con permisos 0600, y eso es toda la protección
+que hay. Si prefieres no guardarlas, deja el campo vacío al crear el usuario y
+la UI la pedirá en cada ejecución.
+
+**No expongas el puerto sin token.** El compose publica solo en `127.0.0.1` a
+propósito. La API puede lanzar corridas con las credenciales ya guardadas, y el
+contenedor web monta `docker.sock` para crear los workers — quien controle esa
+web controla el daemon de Docker, que en la práctica equivale a root en la
+máquina. Si necesitas exponerlo, define `ROSETTA_WEB_TOKEN` primero.
+
+Los tokens de sesión que captura cada corrida se guardan por usuario en
+`state/sessions/<id>.json` con permisos 0600, y la API nunca los devuelve
+enteros: en la UI aparecen enmascarados.
+
+---
+
+## Si algo falla
+
+| Síntoma | Causa habitual |
+|---|---|
+| Cambias código y la web no cambia | Faltó `--force-recreate` al levantar el compose |
+| `did not find executable at ...` | El Python del venv desapareció: `uv python install 3.14` y `uv sync` |
+| La corrida sale con código `3` | Login incompleto; verifica el usuario desde la UI para ver dónde se corta |
+| Un usuario dice `0 completadas` tras ejecutar | Mira el registro en vivo: si no envió nada, la sesión no se capturó |
+| `Could not launch a browser` | No hay Chrome ni Edge: `uv run playwright install chromium` |
+| La UI no responde y Docker acaba de reiniciar | El contenedor arranca solo, pero con la imagen previa: reconstruye |
+
+---
+
+## Desarrollo
+
+Tests (119):
+
+```bash
+uv run pytest -q
+```
+
+Ninguno abre un navegador ni lanza contenedores: la capa web se prueba con un
+backend falso inyectado.
+
+Compilar el `.exe`:
 
 ```bash
 uv run --group dev python build.py
 ```
 
-O, sin `uv`, con el entorno ya sincronizado:
+Sale en `dist/rosseta-script-a.exe`. Copia el `.exe` a una carpeta y pon un
+`.env` **en esa misma carpeta** (lee el suyo, no el del directorio actual). El
+binario **no incluye la interfaz web**, a propósito, para no arrastrar FastAPI.
 
-```bash
-.\.venv\Scripts\python.exe build.py
+### Estructura
+
+```
+src/rosseta_stone_script_a/
+├── domain/           Entidades, valores y errores del dominio
+├── application/      Orquestadores, casos de uso, puertos y servicios
+├── infrastructure/   Adaptadores (Playwright, APIs), estado, configuración
+└── presentation/
+    ├── cli.py        Entrada de terminal, una cuenta
+    ├── worker.py     Una corrida dentro de un contenedor efímero
+    └── web/          Interfaz web multi-usuario (FastAPI + un HTML)
 ```
 
-El ejecutable se genera en `dist/rosseta-script-a.exe`. Para usarlo:
+`docs/ARCHITECTURE.md` explica la modularización y `CLAUDE.md` el ciclo de
+ejecución y las trampas del entorno.
 
-1. Copia `rosseta-script-a.exe` a una carpeta y pon un archivo `.env` **en la misma
-   carpeta** (usa `.env.example` como plantilla — el `.exe` lee el `.env` de su
-   propia carpeta, no del directorio actual).
-2. Necesita Chrome o Edge instalado (lo normal en Windows). No hace falta
-   `playwright install`: el bot usa el navegador del sistema vía `BROWSER_CHANNEL`
-   (`chrome` → `msedge` → Chromium de Playwright como último recurso).
-
-## Contribución
-
-Si deseas contribuir, por favor abre un issue o pull request. Revisa la arquitectura en `docs/ARCHITECTURE.md` para entender el flujo interno.
+---
 
 ## Licencia
 
-Este proyecto está bajo la licencia MIT.
-
----
-Para dudas o soporte, contacta al propietario del repositorio.
+MIT.

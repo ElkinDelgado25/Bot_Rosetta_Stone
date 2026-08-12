@@ -36,6 +36,10 @@ class LoginPage(AuthPort):
         super().__init__()
         self.web_session = web_session
         self.rosetta_login_url = rosetta_login_url
+        # Whether the institutional (uleam) step appeared and was clicked. The
+        # verification flow reports it: a login that silently skipped this step
+        # is the usual reason a capture ends up incomplete.
+        self.institution_selected: bool = False
 
         # --- Selectors ---
 
@@ -73,7 +77,9 @@ class LoginPage(AuthPort):
         await self.web_session.navigator.wait_for_load()
 
         # Handle institutional account selection
-        await self._handle_institutional_account_selection(creds)
+        self.institution_selected = bool(
+            await self._handle_institutional_account_selection(creds)
+        )
 
         self.logger.info("Login process completed successfully")
 

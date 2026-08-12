@@ -7,8 +7,8 @@ services:
 
     ports:
       # Publicado solo en loopback. Cambiar a "8000:8000" lo expone a toda la
-      # red local, y la API puede lanzar corridas con las credenciales
-      # guardadas: hazlo únicamente con ROSETTA_WEB_TOKEN definido.
+      # red local, y esta API puede lanzar contenedores: hazlo únicamente con
+      # ROSETTA_WEB_TOKEN definido.
       - "127.0.0.1:8000:8000"
 
     environment:
@@ -16,12 +16,29 @@ services:
       # el puerto. Defínelo en un archivo .env junto a este compose.
       ROSETTA_WEB_TOKEN: ${ROSETTA_WEB_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Imagen que usan los workers: la misma, con otro comando.
+      ROSETTA_WORKER_IMAGE: rosseta-script-a:latest
+      # Ruta de ./data EN EL HOST. El worker monta el mismo directorio, y desde
+      # dentro del contenedor no se puede adivinar cuál es. Se autodetecta
+      # inspeccionando los mounts propios; esto es el respaldo explícito.
+      ROSETTA_DATA_HOST_PATH: ${ROSETTA_DATA_HOST_PATH:-}
 
     volumes:
       # .env, profiles.json, state/ y logs/ viven aquí. Es lo único que hay que
       # respaldar; sin este volumen se pierde el progreso entre reinicios.
       - ./data:/data
+      # Necesario para lanzar un contenedor por usuario. AVISO: quien controle
+      # esta web controla el daemon de Docker, y eso equivale a root en el host.
+      # Por eso el puerto está en loopback.
+      - /var/run/docker.sock:/var/run/docker.sock
 
-    # Chromium agota los 64 MB de /dev/shm que Docker da por defecto. El código
-    # ya pasa --disable-dev-shm-usage, así que esto es un margen extra.
+    # El usuario no-root del contenedor necesita permiso sobre el socket. En
+    # Docker Desktop (Windows/macOS) el socket es de root:root, así que el
+    # grupo 0 basta. En Linux, pon DOCKER_GID al gid del grupo `docker`:
+    #   DOCKER_GID=$(getent group docker | cut -d: -f3) docker compose up -d
+    group_add:
+      - "${DOCKER_GID:-0}"
+
+    # Chromium agota los 64 MB de /dev/shm que Docker da por defecto. Los
+    # workers reciben el suyo propio; esto cubre el modo in-process.
     shm_size: "512mb"

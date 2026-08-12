@@ -34,10 +34,15 @@ class RosettaCLI(LoggingMixin):
         max_paths_per_day: int = 18,
         state_dir: Path | None = None,
         headless: bool | None = None,
+        verify_only: bool = False,
     ) -> dict:
         """
         Run a hierarchical learning session following Course → Lesson → Activity flow.
         This follows the proper Rosetta Stone hierarchy.
+
+        With *verify_only* it stops after the browser phase: it logs in, walks
+        the institutional step, detects the product and harvests the tokens, but
+        sends nothing. That is what the UI's "Verificar" button runs.
 
         Returns the captured session data, so callers (the web UI) can tell which
         account the run belonged to and locate its state file.
@@ -89,6 +94,13 @@ class RosettaCLI(LoggingMixin):
 
                 # Route by detected product
                 product = captured_data.get("product")
+                if verify_only:
+                    self.logger.info(
+                        "Verificación: producto detectado = %s. No se envía nada.",
+                        product,
+                    )
+                    return captured_data
+
                 if product == RosettaProduct.FLUENCY_BUILDER.value:
                     self.logger.info("Account uses Fluency Builder; running write phase")
                     complete_fluency = factory.create_complete_fluency_orchestrator()

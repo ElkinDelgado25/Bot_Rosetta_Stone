@@ -1,12 +1,18 @@
-"""Serialised, per-profile run execution for the web UI.
+"""Per-profile run execution, one container per user.
 
-Only one run executes at a time: it drives a real browser and writes the
-per-account state file, and two concurrent runs would fight over both. Requests
-for a busy manager are queued FIFO and reported as ``queued`` until their turn.
+With the Docker backend every user runs at once, each in its own throwaway
+container, and its stdout is streamed straight into that user's log buffer. With
+the in-process fallback there is no isolation — one browser, one state file — so
+runs are queued and taken one at a time.
 
-Live progress is *not* tracked in memory. ``complete_foundations`` persists the
-state file after every accepted POST, so re-reading ``RunProgressState`` gives
-the true count mid-run and survives a restart. See ``progress_for``.
+Two channels come back from a run:
+
+* plain log lines, shown in the live console;
+* structured events (``shared.events``), which drive the per-lesson progress.
+
+Persisted progress is still read from ``RunProgressState`` on disk rather than
+kept in memory: ``complete_foundations`` saves after every accepted POST, so the
+file is accurate mid-run and survives a restart.
 """
 
 from __future__ import annotations
@@ -22,14 +28,16 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from rosseta_stone_script_a.domain.entities.credentials import Credentials
 from rosseta_stone_script_a.infrastructure.core import get_settings
 from rosseta_stone_script_a.infrastructure.state.state_store import StateStore
-from rosseta_stone_script_a.presentation.cli import RosettaCLI
+from rosseta_stone_script_a.shared import events
 
+from .backends import InProcessBackend, RunOutcome, select_backend
 from .profiles import Profile, ProfileStore
+from .session_store import SessionStore
 
 MAX_LOG_LINES = 2000
+MAX_LESSONS_TRACKED = 200
 
 # Session tokens and JWTs travel through debug logs. The browser is a wider
 # audience than a local log file, so scrub them on the way out.
@@ -57,6 +65,31 @@ class RunStatus(str, Enum):
 
 
 @dataclass
+class LessonProgress:
+    """Per-lesson tally, built from path_done events."""
+
+    course: str
+    # Foundations gives integers, Fluency gives a title (and no unit at all).
+    unit: Any
+    lesson: Any
+    ok: int = 0
+    failed: int = 0
+
+    @property
+    def key(self) -> str:
+        return f"{self.course}|{self.unit}|{self.lesson}"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "course": self.course,
+            "unit": self.unit,
+            "lesson": self.lesson,
+            "ok": self.ok,
+            "failed": self.failed,
+        }
+
+
+@dataclass
 class RunRecord:
     """The latest (or in-flight) run for one profile."""
 
@@ -66,23 +99,46 @@ class RunRecord:
     finished_at: str | None = None
     error: str | None = None
     logs: deque[str] = field(default_factory=lambda: deque(maxlen=MAX_LOG_LINES))
-    # Total lines ever appended, so a client that reconnects knows how many it
-    # missed even after the deque has dropped the oldest ones.
     total_lines: int = 0
+    lessons: dict[str, LessonProgress] = field(default_factory=dict)
+    paths_done: int = 0
+    paths_failed: int = 0
+    paths_total: int | None = None
+    # "run" sends progress; "verify" only logs in and reports what it found.
+    mode: str = "run"
 
     def public_dict(self) -> dict[str, Any]:
         return {
             "profile_id": self.profile_id,
             "status": self.status.value,
+            "mode": self.mode,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "error": self.error,
             "total_lines": self.total_lines,
+            "paths_done": self.paths_done,
+            "paths_failed": self.paths_failed,
+            "paths_total": self.paths_total,
+            "lessons": [lesson.as_dict() for lesson in self.lessons.values()],
         }
+
+    def reset_for_new_run(self) -> None:
+        self.logs.clear()
+        self.total_lines = 0
+        self.lessons.clear()
+        self.paths_done = 0
+        self.paths_failed = 0
+        self.paths_total = None
+        self.error = None
+        self.finished_at = None
 
 
 class _RunLogHandler(logging.Handler):
-    """Feeds root-logger records into the active run's buffer."""
+    """Feeds root-logger records into the active run's buffer.
+
+    Only meaningful for the in-process backend, where the run shares this
+    process. Container runs get their lines from the container's stdout.
+    """
 
     def __init__(self, manager: "RunManager") -> None:
         super().__init__(level=logging.INFO)
@@ -90,38 +146,50 @@ class _RunLogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            message = _redact(record.getMessage())
+            message = record.getMessage()
         except Exception:  # noqa: BLE001 - a broken log must not kill a run
             return
         stamp = datetime.now().strftime("%H:%M:%S")
-        self._manager._append_log(f"{stamp} {record.levelname:<7} {message}")
+        self._manager.ingest_in_process(f"{stamp} {record.levelname:<7} {message}")
 
 
 class RunManager:
-    """Owns the run queue, the active task, and each profile's last result."""
+    """Owns the running set, each profile's log buffer and its last result."""
 
-    def __init__(self, store: ProfileStore, state_dir: Path) -> None:
+    def __init__(
+        self,
+        store: ProfileStore,
+        state_dir: Path,
+        backend: Any | None = None,
+        login_url: str | None = None,
+    ) -> None:
         self._store = store
         self._state_dir = state_dir
+        self.sessions = SessionStore(state_dir)
         self._records: dict[str, RunRecord] = {}
-        self._queue: deque[tuple[str, str | None]] = deque()
-        self._active_profile_id: str | None = None
-        self._active_task: asyncio.Task | None = None
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._queue: deque[tuple[str, str, str]] = deque()
         self._lock = Lock()
         self._handler = _RunLogHandler(self)
-        self._worker: asyncio.Task | None = None
-        # Guarded by _lock, and flipped in the same critical section that
-        # checks the queue: a Task's own `done()` lags the loop by a tick, so
-        # relying on it lets an enqueue land in a queue nobody will drain.
-        self._worker_running = False
         self._handler_attached = False
+        self._worker: asyncio.Task | None = None
+        self._worker_running = False
+        self._in_process_profile: str | None = None
+
+        if backend is None:
+            url = login_url or get_settings().rosseta_settings.rosetta_login_url
+            backend = select_backend(state_dir, url)
+        self.backend = backend
+
+    @property
+    def backend_name(self) -> str:
+        return getattr(self.backend, "name", "desconocido")
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Attach the log handler so runs stream into their record."""
         if not self._handler_attached:
             logging.getLogger().addHandler(self._handler)
             self._handler_attached = True
@@ -129,159 +197,227 @@ class RunManager:
     async def shutdown(self) -> None:
         logging.getLogger().removeHandler(self._handler)
         self._handler_attached = False
-        if self._active_task and not self._active_task.done():
-            self._active_task.cancel()
+        for task in list(self._tasks.values()):
+            if not task.done():
+                task.cancel()
         if self._worker and not self._worker.done():
             self._worker.cancel()
 
     # ------------------------------------------------------------------
-    # Queueing
+    # Launching
     # ------------------------------------------------------------------
 
-    def enqueue(self, profile_id: str, password_override: str | None = None) -> RunRecord:
-        """Queue a run for *profile_id*, or raise if one is already pending."""
+    def enqueue(
+        self, profile_id: str, password: str | None = None, mode: str = "run"
+    ) -> RunRecord:
+        """Start a run for *profile_id*, or queue it if runs can't overlap.
+
+        ``mode="verify"`` logs in, walks the institutional step and detects the
+        product, then stops without sending anything.
+        """
+        if not password:
+            raise ValueError("Se requiere una contraseña para ejecutar")
+
+        parallel = getattr(self.backend, "supports_parallel", False)
         with self._lock:
             record = self._records.get(profile_id)
             if record and record.status in (RunStatus.RUNNING, RunStatus.QUEUED):
                 raise RunAlreadyActive(profile_id)
 
-            record = RunRecord(profile_id=profile_id, status=RunStatus.QUEUED)
-            self._records[profile_id] = record
-            self._queue.append((profile_id, password_override))
-            needs_worker = not self._worker_running
-            if needs_worker:
-                self._worker_running = True
+            record = self._records.setdefault(profile_id, RunRecord(profile_id))
+            record.reset_for_new_run()
+            record.status = RunStatus.QUEUED
+            record.started_at = _now()
+            record.mode = mode
+
+            if not parallel:
+                self._queue.append((profile_id, password, mode))
+                needs_worker = not self._worker_running
+                if needs_worker:
+                    self._worker_running = True
 
         self.start()
-        if needs_worker:
+        if parallel:
+            self._tasks[profile_id] = asyncio.create_task(
+                self._execute(profile_id, password, mode)
+            )
+        elif needs_worker:
             self._worker = asyncio.create_task(self._drain_queue())
         return record
 
-    def cancel(self, profile_id: str) -> bool:
-        """Cancel a queued run, or stop the active one."""
-        with self._lock:
-            queued = [item for item in self._queue if item[0] == profile_id]
-            for item in queued:
-                self._queue.remove(item)
-            if queued:
-                self._finish(profile_id, RunStatus.CANCELLED, "Cancelado antes de iniciar")
-                return True
-            is_active = self._active_profile_id == profile_id
-
-        if is_active and self._active_task and not self._active_task.done():
-            self._active_task.cancel()
-            return True
-        return False
-
     async def _drain_queue(self) -> None:
-        # The finally clears the flag on every exit path — clean drain, crash,
-        # or shutdown cancellation. Leaving it set would wedge the queue: no
-        # later enqueue would ever start a replacement worker.
+        """One-at-a-time execution, for the backend without isolation."""
         try:
             while True:
                 with self._lock:
                     if not self._queue:
                         break
-                    profile_id, password_override = self._queue.popleft()
-                    self._active_profile_id = profile_id
-
-                profile = self._store.get(profile_id)
-                if profile is None:
-                    self._finish(profile_id, RunStatus.ERROR, "El perfil ya no existe")
-                    continue
-
-                self._active_task = asyncio.create_task(
-                    self._execute(profile, password_override)
-                )
+                    profile_id, password, mode = self._queue.popleft()
+                task = asyncio.create_task(self._execute(profile_id, password, mode))
+                self._tasks[profile_id] = task
                 try:
-                    await self._active_task
+                    await task
                 except asyncio.CancelledError:
-                    self._finish(
-                        profile_id, RunStatus.CANCELLED, "Detenido por el usuario"
-                    )
+                    self._finish(profile_id, RunStatus.CANCELLED, "Detenido por el usuario")
                 finally:
-                    self._active_task = None
+                    self._tasks.pop(profile_id, None)
         finally:
             with self._lock:
-                self._active_profile_id = None
                 self._worker_running = False
 
-    # ------------------------------------------------------------------
-    # Execution
-    # ------------------------------------------------------------------
-
-    async def _execute(self, profile: Profile, password_override: str | None) -> None:
-        password = password_override or profile.password
-        if not password:
-            self._finish(
-                profile.id, RunStatus.ERROR, "El perfil no tiene contraseña guardada"
-            )
+    async def _execute(
+        self, profile_id: str, password: str, mode: str = "run"
+    ) -> None:
+        profile = self._store.get(profile_id)
+        if profile is None:
+            self._finish(profile_id, RunStatus.ERROR, "El perfil ya no existe")
             return
 
         with self._lock:
-            record = self._records[profile.id]
+            record = self._records.setdefault(profile_id, RunRecord(profile_id))
             record.status = RunStatus.RUNNING
-            record.started_at = _now()
-            record.logs.clear()
-            record.total_lines = 0
+            self._in_process_profile = (
+                profile_id
+                if isinstance(self.backend, InProcessBackend)
+                else self._in_process_profile
+            )
 
-        settings = get_settings().rosseta_settings
+        def sink(line: str) -> None:
+            self.ingest(profile_id, line)
+
         try:
-            captured = await RosettaCLI().enter_rosetta(
-                rosseta_login_url=settings.rosetta_login_url,
-                user_credentials=Credentials(email=profile.email, password=password),
-                units_to_complete=profile.units_to_complete,
-                lessons_to_complete=profile.lessons_to_complete,
-                path_types_to_complete=profile.path_types_to_complete,
-                target_score_percent=profile.target_score_percent,
-                force_recomplete=profile.force_recomplete,
-                human_mode=profile.human_mode,
-                max_paths_per_day=profile.max_paths_per_day,
-                state_dir=self._state_dir,
-                headless=True,
+            outcome: RunOutcome = await self.backend.run(
+                profile, password, sink, mode
             )
         except asyncio.CancelledError:
+            self._finish(profile_id, RunStatus.CANCELLED, "Detenido por el usuario")
             raise
-        except Exception as exc:  # noqa: BLE001 - surfaced to the UI, not swallowed
-            logging.getLogger("app").exception("La corrida falló")
-            self._finish(profile.id, RunStatus.ERROR, str(exc) or exc.__class__.__name__)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the UI
+            self._finish(profile_id, RunStatus.ERROR, str(exc) or exc.__class__.__name__)
+            return
+        finally:
+            self._tasks.pop(profile_id, None)
+            with self._lock:
+                if self._in_process_profile == profile_id:
+                    self._in_process_profile = None
+
+        if not outcome.ok:
+            self._finish(profile_id, RunStatus.ERROR, outcome.error)
             return
 
-        # Remember the tracking user_id so progress can find the state file
-        # before the next run starts.
-        user_id = (captured or {}).get("user_id")
-        if user_id and user_id != profile.last_user_id:
-            self._store.update(profile.id, last_user_id=user_id)
+        self._absorb_captured(profile, outcome.captured)
+        self._finish(profile_id, RunStatus.SUCCESS, None)
 
-        self._finish(profile.id, RunStatus.SUCCESS, None)
+    def _absorb_captured(self, profile: Profile, captured: dict[str, Any]) -> None:
+        """Keep what the session already knows instead of asking the user."""
+        captured = captured or {}
+        self.sessions.save(profile.id, captured)
+        learned = {
+            "last_user_id": captured.get("user_id"),
+            "display_name": captured.get("user_name"),
+            "product": captured.get("product"),
+        }
+        changed = {
+            key: value
+            for key, value in learned.items()
+            if value and value != getattr(profile, key, None)
+        }
+        # Handled apart from the loop above: False is a real answer here, and
+        # `if value` would throw it away.
+        if "institution_selected" in captured:
+            flag = bool(captured["institution_selected"])
+            if flag != profile.institution_selected:
+                changed["institution_selected"] = flag
+        if changed:
+            self._store.update(profile.id, **changed)
+
+    def cancel(self, profile_id: str) -> bool:
+        with self._lock:
+            queued = [item for item in self._queue if item[0] == profile_id]
+            for item in queued:
+                self._queue.remove(item)
+        if queued:
+            self._finish(profile_id, RunStatus.CANCELLED, "Cancelado antes de iniciar")
+            return True
+
+        task = self._tasks.get(profile_id)
+        if task and not task.done():
+            # Ask the backend first: killing a container is cleaner than
+            # unwinding the task that is waiting on it.
+            asyncio.create_task(self.backend.cancel(profile_id))
+            task.cancel()
+            return True
+        return False
 
     def _finish(self, profile_id: str, status: RunStatus, error: str | None) -> None:
         with self._lock:
-            record = self._records.setdefault(profile_id, RunRecord(profile_id=profile_id))
+            record = self._records.setdefault(profile_id, RunRecord(profile_id))
             record.status = status
             record.error = error
             record.finished_at = _now()
 
     # ------------------------------------------------------------------
-    # Reads
+    # Log and event ingestion
     # ------------------------------------------------------------------
 
-    def _append_log(self, line: str) -> None:
+    def ingest(self, profile_id: str, line: str) -> None:
+        """Take one line from a run: either a structured event or a log line."""
+        event = events.parse(line)
+        if event is not None:
+            self._apply_event(profile_id, event)
+            return
         with self._lock:
-            profile_id = self._active_profile_id
-            if profile_id is None:
-                return
             record = self._records.get(profile_id)
             if record is None:
                 return
-            record.logs.append(line)
+            record.logs.append(_redact(line))
             record.total_lines += 1
+
+    def ingest_in_process(self, line: str) -> None:
+        """Route a root-logger line to the run that owns this process."""
+        with self._lock:
+            profile_id = self._in_process_profile
+        if profile_id:
+            self.ingest(profile_id, line)
+
+    def _apply_event(self, profile_id: str, event: dict[str, Any]) -> None:
+        if event.get("type") != "path_done":
+            return
+        with self._lock:
+            record = self._records.get(profile_id)
+            if record is None:
+                return
+            if event.get("ok"):
+                record.paths_done += 1
+            else:
+                record.paths_failed += 1
+            record.paths_total = event.get("total") or record.paths_total
+
+            # Kept as-is, not coerced: Foundations numbers its units and
+            # lessons, Fluency names them. int() on a lesson title would raise
+            # inside the lock and stop the whole feed.
+            course = str(event.get("course", "?"))
+            unit = event.get("unit")
+            lesson = event.get("lesson")
+            key = f"{course}|{unit}|{lesson}"
+            progress = record.lessons.get(key)
+            if progress is None:
+                if len(record.lessons) >= MAX_LESSONS_TRACKED:
+                    return
+                progress = LessonProgress(course=course, unit=unit, lesson=lesson)
+                record.lessons[key] = progress
+            if event.get("ok"):
+                progress.ok += 1
+            else:
+                progress.failed += 1
+
+    # ------------------------------------------------------------------
+    # Reads
+    # ------------------------------------------------------------------
 
     def record_for(self, profile_id: str) -> RunRecord:
         with self._lock:
-            return self._records.setdefault(
-                profile_id, RunRecord(profile_id=profile_id)
-            )
+            return self._records.setdefault(profile_id, RunRecord(profile_id))
 
     def logs_since(self, profile_id: str, since: int) -> tuple[list[str], int]:
         """Return log lines after index *since*, plus the new cursor."""
@@ -296,24 +432,47 @@ class RunManager:
 
     def queue_position(self, profile_id: str) -> int | None:
         with self._lock:
-            for position, (queued_id, _) in enumerate(self._queue):
+            for position, (queued_id, _, _) in enumerate(self._queue):
                 if queued_id == profile_id:
                     return position + 1
         return None
 
     def progress_for(self, profile: Profile) -> dict[str, Any]:
-        """Read the account's persisted progress straight from its state file."""
+        """Read the account's persisted progress straight from its state file.
+
+        The two products write different files: Foundations uses
+        ``<user_id>.json`` and Fluency ``fluency_<user_id>.json``. Both are
+        checked and added, so a profile shows its progress whichever product it
+        turned out to have — and keeps showing it if the account has both.
+        """
+        empty = {"total_done": 0, "done_today": 0, "last_run": None}
         try:
-            state = StateStore(self._state_dir).load(
-                profile.last_user_id, profile.email
-            )
+            states = [StateStore(self._state_dir).load(profile.last_user_id, profile.email)]
+            fluency = self._fluency_state(profile)
+            if fluency is not None:
+                states.append(fluency)
         except Exception:  # noqa: BLE001 - a missing state dir is not an error
-            return {"total_done": 0, "done_today": 0, "last_run": None}
+            return empty
+
+        last_runs = [s.last_run() for s in states if s.last_run()]
         return {
-            "total_done": state.total_done(),
-            "done_today": state.count_done_today(),
-            "last_run": state.last_run(),
+            "total_done": sum(s.total_done() for s in states),
+            "done_today": sum(s.count_done_today() for s in states),
+            "last_run": max(last_runs) if last_runs else None,
         }
+
+    def _fluency_state(self, profile: Profile):
+        """The Fluency state file for this account, if it exists."""
+        key = profile.last_user_id or profile.email or "default_account"
+        safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in str(key))
+        path = self._state_dir / f"fluency_{safe}.json"
+        if not path.exists():
+            return None
+        from rosseta_stone_script_a.infrastructure.state.run_progress_state import (
+            RunProgressState,
+        )
+
+        return RunProgressState(path)
 
 
 class RunAlreadyActive(RuntimeError):

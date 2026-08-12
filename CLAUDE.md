@@ -22,10 +22,22 @@ Ejecutar:
 .\.venv\Scripts\python.exe -m rosseta_stone_script_a
 ```
 
-Tests (51 tests):
+Tests (119 tests):
 
 ```bash
 .\.venv\Scripts\python.exe -m pytest -q
+```
+
+Levantar la UI web (requiere `uv sync --extra web`):
+
+```bash
+.\.venv\Scripts\python.exe -m rosseta_stone_script_a.presentation.web.server
+```
+
+Levantarla en Docker:
+
+```bash
+docker compose up -d --build
 ```
 
 Compilar el .exe:
@@ -44,10 +56,98 @@ Nota: el módulo se invoca como `rosseta_stone_script_a`, **sin** prefijo `src.`
 La forma `src.rosseta_stone_script_a` funciona solo por namespace package
 implícito y depende de estar parado en la raíz del repo.
 
+## Dos entradas, un solo motor
+
+`presentation/` tiene dos capas hermanas sobre los **mismos** orquestadores:
+
+- **`cli.py`** — una cuenta, la del `.env`, ejecutada de una pasada.
+- **`web/`** — varios usuarios, cada uno con sus credenciales, filtros y
+  progreso. Es solo una fachada: construye el mismo `DependencyFactory` y llama
+  a `RosettaCLI.enter_rosetta`. Nada bajo `application/` o `domain/` sabe que
+  existe.
+
+Piezas de `web/`:
+
+| Archivo | Responsabilidad |
+|---|---|
+| `profiles.py` | `profiles.json` en `get_base_dir()`, permisos 0600. Contraseñas en texto plano, como el `.env` |
+| `backends.py` | Dónde corre una corrida: `DockerBackend` (un contenedor por usuario) o `InProcessBackend` (fallback local) |
+| `run_manager.py` | Estado por perfil, buffer de logs, ingesta de eventos, redacción de JWT/tokens |
+| `session_store.py` | Tokens capturados por usuario en `state/sessions/<id>.json`, 0600 |
+| `app.py` | Rutas FastAPI. Token compartido opcional vía `ROSETTA_WEB_TOKEN` |
+| `static/index.html` | UI entera: sin build, sin CDN, sin dependencias de front |
+
+**Dos modos de corrida.** `mode="run"` hace el ciclo completo; `mode="verify"`
+para tras la fase del navegador (`enter_rosetta(verify_only=True)`): inicia
+sesión, pasa por la selección institucional, detecta el producto y cosecha los
+tokens, pero **no envía nada**. Es el botón *Verificar*, y se dispara solo al
+crear un usuario. El modo viaja por el mismo camino que todo lo demás: perfil →
+`RunManager.enqueue(mode=...)` → backend → config del worker.
+
+**Los endpoints que lanzan corridas son `async def`.** `enqueue` programa una
+`asyncio.Task`; un endpoint síncrono lo ejecuta FastAPI en un hilo del pool, sin
+event loop, y `create_task` lanza `RuntimeError`. Como los tests de error
+(400/404/409) nunca llegan a esa línea, el fallo solo aparecía en producción —
+por eso hay un test del camino feliz por HTTP.
+
+Y `presentation/worker.py`: el comando que ejecuta **un** contenedor efímero.
+Lee su config de un JSON en el volumen, corre una sola corrida, y devuelve los
+tokens capturados por un archivo de resultado.
+
+## Arquitectura de ejecución
+
+```
+contenedor web (orquestador)          docker.sock
+  · gestiona usuarios          ──────────────────► worker usuario1  (efímero)
+  · lanza un worker por usuario                    worker usuario2  (efímero)
+  · lee stdout de cada worker  ◄──────────────────  worker usuario3  (efímero)
+```
+
+**Contenedores hermanos, no Docker-in-Docker.** DinD exige `--privileged` y
+anida Chromium; los hermanos usan el daemon que ya corre. El precio: el
+contenedor web monta `docker.sock`, y quien controle esa web controla el daemon
+— por eso el puerto está en loopback en el compose.
+
+**Dos canales de vuelta.** El worker escribe a stdout: líneas de log normales y
+eventos JSON con prefijo `@@EVENT` (`shared/events.py`). El orquestador separa
+unos de otros en `RunManager.ingest`; los eventos alimentan el avance por
+unidad/lección, el resto va a la consola en vivo.
+
+**Los tokens no van por stdout.** Cualquiera con acceso al daemon puede leer los
+logs de un contenedor, así que la sesión capturada vuelve por
+`<config>.result.json` en el volumen, y config y resultado se borran al terminar.
+
+**Dos backends, uno se elige solo.** `select_backend` usa contenedores solo si
+la web *misma* corre en uno (`/.dockerenv` o `ROSETTA_DATA_HOST_PATH`): un
+Docker Desktop en el portátil responde al socket, pero un worker lanzado desde
+ahí no podría montar el `/data` del proceso. Se fuerza con
+`ROSETTA_RUN_BACKEND=docker|in-process`.
+
+**Con contenedores no hay cola; sin ellos sí.** `DockerBackend.supports_parallel`
+es `True` y cada usuario arranca de inmediato. `InProcessBackend` comparte
+navegador y archivo de estado, así que `RunManager` serializa y los demás quedan
+en `queued` con su posición.
+
+**El worker necesita el `/data` del host, no el suyo.** Un bind mount apunta a
+una ruta del host que desde dentro no se ve; `_host_data_path()` la deduce
+inspeccionando los propios mounts vía la API de Docker, con
+`ROSETTA_DATA_HOST_PATH` como respaldo.
+
+**El progreso no se guarda en memoria.** `progress_for()` relee
+`RunProgressState` del disco en cada consulta. Como `complete_foundations`
+persiste tras cada POST aceptado, eso da el avance real a mitad de corrida y
+sobrevive a un reinicio del contenedor. Un contador en RAM no haría ninguna de
+las dos cosas.
+
+**El `user_id` se aprende.** El archivo de estado se llama `<user_id>.json`, y
+ese id no se conoce hasta que una corrida lo captura. Por eso `enter_rosetta`
+devuelve `captured_data` y el perfil guarda `last_user_id`; antes de la primera
+corrida el progreso se busca por el slug del email.
+
 ## Ciclo de ejecución
 
-Cuatro fases. La entrada es `presentation/cli.py`; la coordinación vive en
-`application/orchestrators/`.
+Cuatro fases. La entrada es `presentation/cli.py` (o `presentation/web/`); la
+coordinación vive en `application/orchestrators/`.
 
 ### 1. Captura de credenciales (navegador)
 
@@ -112,7 +212,8 @@ Necesita cinco valores, de dos sistemas distintos:
 | `session_token` | Header `x-rosettastone-session-token` |
 
 `is_complete()` verifica que estén los cinco. Si falta alguno, el orquestador
-registra un warning y **omite la fase de completación sin fallar**.
+lanza `SessionCaptureIncomplete` y la corrida **falla con código 3**: no se
+envía nada y se nota.
 
 Después de esta fase el navegador ya no interviene: todo lo demás va por
 `APIRequestContext`.
@@ -181,11 +282,38 @@ workspace como `fluency_builder_workspace`, pero ese use case navega a
 Foundations. Es un nombre heredado y confunde justamente donde más importa;
 conviene renombrarlo.
 
-**Fallos silenciosos en cadena** — tres puntos degradan sin abortar: el nombre de
-usuario (warning), la selección institucional (warning), y la fase de completación
-si faltan tokens (warning + return). Una corrida puede "terminar bien" habiendo
- hecho nada. Como esas rutas no lanzan una excepción, todavía terminan con código
- 0 y no dan una señal de fallo al scheduler.
+**El estado de Fluency es por cuenta, no global** — las claves de actividad son
+`fluency|curso|secuencia|actividad`, **sin la cuenta dentro**. Con el antiguo
+`fluency_state.json` único, el segundo usuario veía como hechas las actividades
+del primero y las saltaba: terminaba con código 0 sin enviar nada. Ahora es
+`fluency_<user_id>.json` (`_state_for`), resuelto en `execute()` porque el
+`user_id` no se conoce hasta que la corrida lo captura. Foundations ya lo hacía
+así vía `StateStore`.
+
+**El progreso de la UI suma los dos esquemas** — `progress_for` lee
+`<user_id>.json` *y* `fluency_<user_id>.json`. Mirar solo el primero hacía que
+una cuenta de Fluency mostrara siempre "0 completadas" por muchas lecciones que
+hubiera hecho.
+
+**Los eventos aceptan unidad/lección no numéricas** — Foundations las numera,
+Fluency las nombra (`"Preflight"`) y no tiene unidad. `_apply_event` guarda el
+valor tal cual; un `int()` sobre el título reventaba dentro del lock y mataba la
+ingesta entera.
+
+**Sesión incompleta = error, no silencio** — si la fase del navegador no cosecha
+los cinco valores, ambos orquestadores lanzan `SessionCaptureIncomplete`
+(`domain/errors.py`) en vez de avisar y volver. Antes esa ruta salía con código
+0 habiendo enviado nada: el scheduler veía éxito y la UI un chip verde.
+
+**Códigos de salida** — `0` ok · `1` error · `2` config ilegible (solo el
+worker) · `3` sesión incompleta · `130` interrumpido. El `3` está separado a
+propósito: distingue "falló el login" de un fallo cualquiera.
+
+**Lo que sí sigue degradando** — el nombre de usuario (solo se usa para el
+reporte) y la selección institucional emiten warning y continúan. El primero es
+opcional de verdad; el segundo se manifiesta después, porque sin elegir la
+organización el login no llega al launchpad y la captura queda incompleta —
+que ahora sí falla.
 
 ## Entorno (trampas verificadas)
 
@@ -210,16 +338,58 @@ autodetección de setuptools.
 sandboxed, `Test-Path` sobre esa ruta puede dar falsos positivos apuntando a una
 copia privada. Verifica con `(Get-Item ruta).Target`.
 
+**`ROSETTA_HOME` manda sobre el cwd.** `get_base_dir()` y
+`detect_project_root()` la respetan, y de ahí cuelgan `.env`, `profiles.json`,
+`state/` y `logs/`. El contenedor la fija en `/data`; sin ella todo caería
+relativo al directorio de trabajo, que en la imagen no es escribible por el
+usuario no-root.
+
+**`BROWSER_CHANNEL` vacío significa "sin canal".** El provider prueba
+`chrome` → `msedge` → Chromium bundled. En Linux los dos primeros no existen, y
+cada intento fallido cuesta una excepción; la imagen lo deja vacío para ir
+directo al Chromium de Playwright.
+
+**Las imágenes de Playwright no sirven aquí.** `mcr.microsoft.com/playwright/python`
+trae Python 3.12 y el proyecto exige >=3.14. Por eso el Dockerfile parte de
+`python:3.14-slim` e instala Chromium con `playwright install --with-deps`.
+
+**Los tests de la web nunca abren un navegador ni un contenedor.**
+`tests/presentation/web/conftest.py` da un `FakeBackend` que se inyecta en
+`RunManager` y `create_app`. Ninguno de los dos resuelve un backend por su
+cuenta en los tests. Si se quita, un test que lance una corrida abrirá Chrome de
+verdad e intentará loguearse en Rosetta Stone — pasó durante el desarrollo y
+cuelga la suite.
+
+**El JSON del worker se lee con `utf-8-sig`.** Un archivo de configuración
+tocado a mano en Windows lleva BOM, y `json.load` revienta con un traceback que
+no explica nada.
+
 ## Alcance
 
+Trabajo que corresponde en este repo: empaquetado, entorno, build del `.exe`,
+contenedores, la UI web, tests, logging, códigos de salida, mensajes de error,
+refactors y documentación.
 
-Trabajo que se complementa corresponde en este repo: empaquetado, entorno, build del `.exe`,
-tests, logging, códigos de salida, mensajes de error, refactors y documentación.
+Extender el mecanismo de completación fabricada a productos nuevos (Fluency
+Builder u otros) también entra.
 
-Lo que hacer inmediatamente es : extender el mecanismo de completación fabricada a productos nuevos
-(Fluency Builder u otros), Se tiene que trabajar en hacer que los envíos sean más difíciles
-de distinguir de actividad real.
+**Fuera de alcance:** hacer que los envíos sean más difíciles de distinguir de
+actividad real. Es evasión de detección y no se trabaja aquí. La línea es:
+implementar la funcionalidad sí, disfrazarla no.
 
-Para el futuro, se puede pensar en crearle una cli usando docker tambien, sera necesario consulta que tiene y em base a eso tener que hacer un plan de trabajo para poder hacer que el bot sea más robusto y pueda soportar cambios en la plataforma de Rosetta Stone. 
+### Pendiente
+
+- No hay CLI con argumentos: `main_cli()` sigue leyendo todo del `.env`.
+- El `.exe` de PyInstaller no incluye la UI web (el extra `web` es opcional a
+  propósito, para no arrastrar FastAPI al binario).
+- El literal `"uleam"` sigue hardcodeado en `login_page.py`; con otra
+  institución el login queda a medias y ahora falla con `SessionCaptureIncomplete`,
+  que es mejor que antes pero no explica la causa real.
+- La vista de avance por lección se ha probado con eventos sintéticos y con una
+  corrida real de Foundations; con Fluency los eventos son nuevos y aún no se
+  han visto en vivo.
+- `data/state/fluency_state.json.compartido.bak` es el estado global de antes
+  del arreglo. Se apartó en vez de repartirlo porque no hay forma fiable de
+  saber de qué cuenta era; se puede borrar cuando ambos usuarios hayan corrido.
 
 

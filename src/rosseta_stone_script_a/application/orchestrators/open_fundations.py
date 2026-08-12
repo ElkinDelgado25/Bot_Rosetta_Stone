@@ -104,6 +104,13 @@ class OpenFundations(OrchestratorPort):
         captured_data["credentials"] = {
             "email": str(credentials.email),
         }
+        # Reported by the verification flow: the institutional step is the
+        # usual suspect when a login "succeeds" but captures nothing.
+        captured_data["institution_selected"] = getattr(
+            getattr(self.login_use_case, "login_page", None),
+            "institution_selected",
+            False,
+        )
 
         self.logger.info(f"Product entry workflow completed ({product.value})")
         return captured_data

@@ -12,6 +12,7 @@ from rosseta_stone_script_a.application.use_cases.complete_foundations import (
     CompleteFoundationsUseCase,
 )
 from rosseta_stone_script_a.domain.entities.completion_stats import CompletionStats
+from rosseta_stone_script_a.domain.errors import SessionCaptureIncomplete
 
 
 class CompleteFoundationsOrchestrator(OrchestratorPort):
@@ -48,11 +49,12 @@ class CompleteFoundationsOrchestrator(OrchestratorPort):
         missing_keys = [k for k in required_keys if not captured_data.get(k)]
 
         if missing_keys:
-            self.logger.warning(
-                f"Missing captured session data: {missing_keys}. Skipping completion."
+            # Loud on purpose. Returning here used to leave the process exiting
+            # 0 after sending nothing, which reads as success everywhere.
+            self.logger.error(
+                f"Missing captured session data: {missing_keys}. Nothing was sent."
             )
-            self.logger.debug(f"Captured data state: {captured_data}")
-            return
+            raise SessionCaptureIncomplete(missing_keys, product="Foundations")
 
         self.logger.info("Session data captured successfully. Starting completion...")
         email = (captured_data.get("credentials") or {}).get("email")

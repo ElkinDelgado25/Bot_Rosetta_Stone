@@ -68,6 +68,10 @@
     border: 1px solid var(--border); background: var(--bg); color: var(--text);
     font: inherit;
   }
+  /* Campos de contraseña sin type="password": Chrome solo ofrece guardar y
+     autocompletar cuando ve ese tipo, así que se oculta el texto por CSS.
+     Firefox no soporta text-security; para ese caso hay un fallback en JS. */
+  input.masked { -webkit-text-security: disc; text-security: disc; }
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .checks { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; }
   .checks label { display: flex; align-items: center; gap: 6px; margin: 0;
@@ -97,6 +101,35 @@
   .banner { border-radius: 8px; padding: 9px 12px; margin-bottom: 12px;
             border: 1px solid var(--err); color: var(--err); font-size: 13px; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .facts { display: flex; gap: 18px; flex-wrap: wrap; margin: 12px 0 4px;
+           font-size: 12px; color: var(--muted); }
+  .facts b { color: var(--text); font-weight: 600; }
+  .lessons { margin-top: 14px; border: 1px solid var(--border);
+             border-radius: 8px; padding: 10px 12px; }
+  .lessons-head { display: flex; justify-content: space-between; gap: 10px;
+                  align-items: baseline; font-size: 13px; flex-wrap: wrap; }
+  .lessons-head span { color: var(--muted); font-size: 12px; }
+  .bar { height: 5px; border-radius: 3px; background: var(--border);
+         margin: 9px 0; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent);
+           transition: width .4s ease; }
+  .lessons-scroll { max-height: 190px; overflow-y: auto; overflow-x: auto; }
+  .lessons table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  .lessons th { text-align: left; color: var(--muted); font-weight: 500;
+                padding: 4px 10px 4px 0; position: sticky; top: 0;
+                background: var(--panel); }
+  .lessons td { padding: 3px 10px 3px 0; }
+  .lessons td.ok { color: var(--ok); }
+  .lessons td.bad { color: var(--err); }
+  details.session { margin-top: 12px; border: 1px solid var(--border);
+                    border-radius: 8px; padding: 9px 12px; }
+  details.session summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+  details.session table { border-collapse: collapse; margin-top: 9px; width: 100%; }
+  details.session th { text-align: left; font-weight: 500; color: var(--muted);
+                       padding: 3px 12px 3px 0; white-space: nowrap;
+                       vertical-align: top; font-size: 12px; }
+  details.session td { padding: 3px 0; font-size: 12px; word-break: break-all;
+                       font-family: ui-monospace, Consolas, monospace; }
 </style>
 </head>
 <body>
@@ -104,7 +137,9 @@
   <h1>Rosetta Script A</h1>
   <span class="chip idle" id="health">conectando…</span>
   <div class="spacer"></div>
-  <input type="password" id="token" placeholder="Token de acceso" style="width:190px">
+  <input type="text" class="masked" id="token" placeholder="Token de acceso"
+         style="width:190px" autocomplete="off" autocorrect="off" autocapitalize="off"
+         spellcheck="false" data-lpignore="true" data-1p-ignore data-form-type="other">
 </header>
 
 <main>
@@ -133,6 +168,26 @@
 
 const state = { profiles: [], selected: null, cursor: 0, editing: false, autoscroll: true };
 const $ = (id) => document.getElementById(id);
+
+/* Nada de gestores de contraseñas. Esta página no es un login: guarda las
+   credenciales del bot, y que Chrome ofrezca recordarlas o las autocomplete con
+   otra cuenta solo estorba. Sin <form>, sin type="password" y con las marcas
+   que respetan 1Password y LastPass, el diálogo no llega a dispararse. */
+const NO_AUTOFILL = `autocomplete="off" autocorrect="off" autocapitalize="off"
+  spellcheck="false" data-lpignore="true" data-1p-ignore data-bwignore
+  data-form-type="other"`;
+
+/* Firefox no implementa text-security: allí sí hace falta type="password"
+   para que la contraseña no se vea en pantalla. */
+const SUPPORTS_TEXT_SECURITY =
+  window.CSS && CSS.supports && CSS.supports("-webkit-text-security", "disc");
+
+function hardenMaskedFields(root) {
+  if (SUPPORTS_TEXT_SECURITY) return;
+  (root || document).querySelectorAll("input.masked").forEach((input) => {
+    input.type = "password";
+  });
+}
 
 $("token").value = localStorage.getItem("rosetta_token") || "";
 $("token").addEventListener("change", (e) => {
@@ -164,9 +219,30 @@ function escapeHtml(value) {
 
 function statusLabel(profile) {
   const status = profile.run.status;
+  const verifying = profile.run.mode === "verify";
   if (status === "queued" && profile.queue_position)
     return `en cola #${profile.queue_position}`;
+  if (status === "running") return verifying ? "verificando" : "running";
+  if (status === "success" && verifying) return "verificado";
   return status;
+}
+
+/* Lo que la verificación averiguó de la cuenta. */
+function renderAccountFacts(profile) {
+  if (!profile.product && profile.institution_selected === null) {
+    return `<p class="hint">Sin verificar todavía. Pulsa <b>Verificar</b> para
+      comprobar el acceso y saber qué producto usa esta cuenta.</p>`;
+  }
+  const producto = profile.product
+    ? (profile.product === "fluency_builder" ? "Fluency Builder" : "Foundations")
+    : "sin detectar";
+  const inst = profile.institution_selected === null ? "sin comprobar"
+    : profile.institution_selected ? "encontrada" : "no apareció";
+  return `
+    <div class="facts">
+      <span><b>Producto:</b> ${escapeHtml(producto)}</span>
+      <span><b>Ruta institucional:</b> ${escapeHtml(inst)}</span>
+    </div>`;
 }
 
 function renderList() {
@@ -178,11 +254,12 @@ function renderList() {
   container.innerHTML = state.profiles.map((p) => `
     <button class="profile" data-id="${p.id}" aria-selected="${p.id === state.selected}">
       <span class="top">
-        <span class="name">${escapeHtml(p.name)}</span>
+        <span class="name">${escapeHtml(p.display_name || p.email)}</span>
         <span class="chip ${p.run.status}"><i class="dot"></i>${escapeHtml(statusLabel(p))}</span>
       </span>
-      <div class="email">${escapeHtml(p.email)}</div>
-      <div class="meta">${p.progress.total_done} completados · hoy ${p.progress.done_today}</div>
+      ${p.display_name ? `<div class="email">${escapeHtml(p.email)}</div>` : ""}
+      <div class="meta">${p.progress.total_done} completados · hoy ${p.progress.done_today}${
+        p.product ? " · " + escapeHtml(p.product) : ""}</div>
     </button>`).join("");
 
   container.querySelectorAll(".profile").forEach((node) => {
@@ -196,6 +273,79 @@ function renderList() {
       render();
     });
   });
+}
+
+/* Avance de la corrida por unidad y lección, construido con los eventos que
+   emite el worker. Aparece en cuanto llega el primer path. */
+function renderLessons(run) {
+  if (!run.lessons || !run.lessons.length) {
+    if (run.status !== "running") return "";
+    return `<p class="hint">Esperando el primer envío…</p>`;
+  }
+
+  const pct = run.paths_total
+    ? Math.round(((run.paths_done + run.paths_failed) / run.paths_total) * 100)
+    : null;
+
+  // Foundations numera unidades y lecciones; Fluency las nombra y no tiene
+  // unidad. Se prefija con U/L solo cuando el valor es un número.
+  const etiqueta = (valor, prefijo) =>
+    valor === null || valor === undefined || valor === ""
+      ? "—"
+      : (typeof valor === "number" ? prefijo + valor : String(valor));
+
+  const filas = run.lessons.map((l) => `
+    <tr>
+      <td>${escapeHtml(l.course)}</td>
+      <td>${escapeHtml(etiqueta(l.unit, "U"))}</td>
+      <td>${escapeHtml(etiqueta(l.lesson, "L"))}</td>
+      <td class="ok">${l.ok}</td>
+      <td class="${l.failed ? "bad" : ""}">${l.failed || "—"}</td>
+    </tr>`).join("");
+
+  return `
+    <div class="lessons">
+      <div class="lessons-head">
+        <b>Avance de esta corrida</b>
+        <span>${run.paths_done} enviados${run.paths_failed ? " · " + run.paths_failed + " fallidos" : ""}${
+          run.paths_total ? " de " + run.paths_total : ""}</span>
+      </div>
+      ${pct === null ? "" : `<div class="bar"><i style="width:${Math.min(100, pct)}%"></i></div>`}
+      <div class="lessons-scroll">
+        <table>
+          <thead><tr><th>Curso</th><th>Unidad</th><th>Lección</th><th>OK</th><th>Fallidos</th></tr></thead>
+          <tbody>${filas}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+/* Tokens de acceso de este usuario, capturados en su última ejecución. Los
+   identificadores van en claro; el JWT y el token de sesión llegan ya
+   enmascarados del servidor — el valor real solo existe en el archivo
+   state/sessions/<id>.json. */
+function renderSession(session) {
+  if (!session || !session.captured_at) {
+    return `<p class="hint">Tokens de acceso: se capturan en la primera ejecución.</p>`;
+  }
+  const rows = [
+    ["Escuela", session.school_id],
+    ["Usuario", session.user_id],
+    ["Idioma", session.lang_code],
+    ["Producto", session.product],
+    ["Authorization", session.authorization],
+    ["Token de sesión", session.session_token],
+  ].filter(([, value]) => value);
+
+  return `
+    <details class="session">
+      <summary>Tokens de acceso · capturados ${escapeHtml(new Date(session.captured_at).toLocaleString())}</summary>
+      <table>
+        ${rows.map(([label, value]) =>
+          `<tr><th>${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>`).join("")}
+      </table>
+      <p class="hint">Los valores completos viven en state/sessions/ dentro de los datos del bot.</p>
+    </details>`;
 }
 
 function renderDetail() {
@@ -215,9 +365,10 @@ function renderDetail() {
     : "nunca";
 
   detail.innerHTML = `
-    <h2>${escapeHtml(profile.name)}</h2>
+    <h2>${escapeHtml(profile.display_name || profile.email)}</h2>
     <div class="email" style="color:var(--muted);margin-bottom:12px">
       ${escapeHtml(profile.email)}
+      ${profile.product ? " · " + escapeHtml(profile.product) : ""}
       ${profile.has_password ? "" : " · <b>sin contraseña guardada</b>"}
     </div>
     <div class="stats">
@@ -225,35 +376,46 @@ function renderDetail() {
       <div class="stat"><b>${profile.progress.done_today}</b><span>Hoy</span></div>
       <div class="stat"><b class="chip ${run.status}" style="font-size:13px">${escapeHtml(statusLabel(profile))}</b><span>Estado</span></div>
     </div>
+    ${renderAccountFacts(profile)}
     <p class="hint">Última corrida: ${escapeHtml(lastRun)}${run.error ? " · Error: " + escapeHtml(run.error) : ""}</p>
+    ${renderLessons(run)}
+    ${renderSession(profile.session)}
     ${profile.has_password ? "" : `
       <label for="runPassword">Contraseña para esta corrida</label>
-      <input type="password" id="runPassword" placeholder="No se guardará">`}
+      <input type="text" class="masked" id="runPassword" ${NO_AUTOFILL}
+             placeholder="No se guardará">`}
     <div class="actions">
       <button class="primary" id="runBtn" ${busy ? "disabled" : ""}>Ejecutar</button>
+      <button id="verifyBtn" ${busy ? "disabled" : ""}>Verificar</button>
       <button id="stopBtn" ${busy ? "" : "disabled"}>Detener</button>
       <button id="editBtn">Editar</button>
       <button class="danger" id="deleteBtn" ${busy ? "disabled" : ""}>Eliminar</button>
-    </div>`;
+    </div>
+    <p class="hint">Verificar solo inicia sesión y detecta el producto: no envía nada.</p>`;
 
-  $("runBtn").addEventListener("click", async () => {
+  hardenMaskedFields(detail);
+
+  async function launch(accion) {
     const field = $("runPassword");
     try {
-      await api(`/api/profiles/${profile.id}/run`, {
+      await api(`/api/profiles/${profile.id}/${accion}`, {
         method: "POST",
         body: JSON.stringify({ password: field ? field.value : null }),
       });
       state.cursor = 0;
       $("console").textContent = "";
       showError("");
-      refresh();
+      refresh({ force: true });
     } catch (err) { showError(err.message); }
-  });
+  }
+
+  $("runBtn").addEventListener("click", () => launch("run"));
+  $("verifyBtn").addEventListener("click", () => launch("verify"));
 
   $("stopBtn").addEventListener("click", async () => {
     try { await api(`/api/profiles/${profile.id}/stop`, { method: "POST" }); showError(""); }
     catch (err) { showError(err.message); }
-    refresh();
+    refresh({ force: true });
   });
 
   $("editBtn").addEventListener("click", () => { state.editing = true; render(); });
@@ -264,73 +426,42 @@ function renderDetail() {
       await api(`/api/profiles/${profile.id}`, { method: "DELETE" });
       state.selected = null;
       showError("");
-      refresh();
+      refresh({ force: true });
     } catch (err) { showError(err.message); }
   });
 }
 
 function renderForm(profile) {
   const isNew = !profile;
-  const value = profile || {
-    name: "", email: "", units_to_complete: [], lessons_to_complete: [],
-    path_types_to_complete: [], target_score_percent: 100, human_mode: false,
-    force_recomplete: false, max_paths_per_day: 18, has_password: false,
-  };
+  const value = profile || { email: "", has_password: false };
 
   $("detail").innerHTML = `
     <h2>${isNew ? "Nuevo usuario" : "Editar usuario"}</h2>
-    <div class="row">
-      <div><label for="f_name">Nombre</label>
-        <input type="text" id="f_name" value="${escapeHtml(value.name)}"></div>
-      <div><label for="f_email">Email de Rosetta Stone</label>
-        <input type="email" id="f_email" value="${escapeHtml(value.email)}"></div>
-    </div>
-    <label for="f_password">Contraseña ${isNew ? "" : "(vacío = sin cambios)"}</label>
-    <input type="password" id="f_password" placeholder="${value.has_password ? "•••••••• guardada" : "sin guardar"}">
-    <div class="row">
-      <div><label for="f_units">Unidades (vacío = todas)</label>
-        <input type="text" id="f_units" value="${value.units_to_complete.join(",")}" placeholder="1,2,3"></div>
-      <div><label for="f_lessons">Lecciones (vacío = todas)</label>
-        <input type="text" id="f_lessons" value="${value.lessons_to_complete.join(",")}" placeholder="1,2"></div>
-    </div>
-    <div class="row">
-      <div><label for="f_types">Tipos de path (vacío = todos)</label>
-        <input type="text" id="f_types" value="${value.path_types_to_complete.join(",")}" placeholder="production_milestone"></div>
-      <div><label for="f_score">Puntaje objetivo %</label>
-        <input type="number" id="f_score" min="0" max="100" value="${value.target_score_percent}"></div>
-    </div>
-    <label for="f_cap">Tope diario de paths (solo en modo humano)</label>
-    <input type="number" id="f_cap" min="1" max="500" value="${value.max_paths_per_day}">
-    <div class="checks">
-      <label><input type="checkbox" id="f_human" ${value.human_mode ? "checked" : ""}> Modo humano</label>
-      <label><input type="checkbox" id="f_force" ${value.force_recomplete ? "checked" : ""}> Recompletar</label>
-    </div>
+    <label for="f_email">Correo de Rosetta Stone</label>
+    <input type="text" inputmode="email" id="f_email" value="${escapeHtml(value.email)}"
+           ${NO_AUTOFILL}>
+    <label for="f_password">Contraseña${isNew ? "" : " (vacío = sin cambios)"}</label>
+    <input type="text" class="masked" id="f_password" ${NO_AUTOFILL}
+           placeholder="${value.has_password ? "•••••••• guardada" : ""}">
     <div class="actions">
       <button class="primary" id="saveBtn">Guardar</button>
       <button id="cancelBtn">Cancelar</button>
     </div>
-    <p class="hint">La contraseña se guarda en texto plano en profiles.json, igual que en el .env.
-      Déjala vacía para que se pida en cada ejecución.</p>`;
+    <p class="hint">Lo demás lo averigua el bot al ejecutar: nombre de la cuenta,
+      producto y el curso completo desde la propia plataforma.</p>
+    <p class="hint">La contraseña se guarda en texto plano en profiles.json, igual que en el .env.</p>`;
+
+  hardenMaskedFields($("detail"));
 
   $("cancelBtn").addEventListener("click", () => { state.editing = false; render(); });
 
   $("saveBtn").addEventListener("click", async () => {
-    const numbers = (id) => $(id).value.split(",").map((s) => s.trim())
-      .filter(Boolean).map(Number).filter((n) => Number.isInteger(n));
-    const body = {
-      name: $("f_name").value.trim(),
-      email: $("f_email").value.trim(),
-      units_to_complete: numbers("f_units"),
-      lessons_to_complete: numbers("f_lessons"),
-      path_types_to_complete: $("f_types").value.split(",").map((s) => s.trim()).filter(Boolean),
-      target_score_percent: Number($("f_score").value),
-      max_paths_per_day: Number($("f_cap").value),
-      human_mode: $("f_human").checked,
-      force_recomplete: $("f_force").checked,
-    };
+    const body = { email: $("f_email").value.trim() };
     const password = $("f_password").value;
     if (isNew || password) body.password = password || null;
-    if (!body.name || !body.email) { showError("Nombre y email son obligatorios."); return; }
+
+    if (!body.email) { showError("El correo es obligatorio."); return; }
+    if (isNew && !password) { showError("La contraseña es obligatoria."); return; }
 
     try {
       const saved = isNew
@@ -338,28 +469,50 @@ function renderForm(profile) {
         : await api(`/api/profiles/${profile.id}`, { method: "PATCH", body: JSON.stringify(body) });
       state.selected = saved.id;
       state.editing = false;
+      state.cursor = 0;
+      $("console").textContent = "";
       showError("");
-      refresh();
+
+      // Un usuario recién creado se verifica solo: comprueba el acceso y
+      // averigua el producto antes de que nadie pulse Ejecutar.
+      if (isNew) {
+        try {
+          await api(`/api/profiles/${saved.id}/verify`, {
+            method: "POST", body: JSON.stringify({}),
+          });
+        } catch (err) { showError("Guardado, pero no se pudo verificar: " + err.message); }
+      }
+      refresh({ force: true });
     } catch (err) { showError(err.message); }
   });
 }
 
 function render() { renderList(); renderDetail(); }
 
-async function refresh() {
+/* El refresco automático no debe redibujar el panel derecho mientras lo estás
+   usando: reemplazar su innerHTML borra lo que hay escrito y destruye el nodo
+   del botón, así que un clic que caiga en ese instante se pierde sin llegar a
+   enviarse. La lista de la izquierda sí se refresca siempre: no tiene inputs. */
+function isUserBusyInDetail() {
+  if (state.editing) return true;
+  const active = document.activeElement;
+  return Boolean(active && active.tagName === "INPUT" && $("detail").contains(active));
+}
+
+async function refresh({ force = false } = {}) {
   try {
     const data = await api("/api/profiles");
     state.profiles = data.profiles;
     $("health").textContent = "conectado";
     $("health").className = "chip success";
-    showError("");
   } catch (err) {
     $("health").textContent = "sin conexión";
     $("health").className = "chip error";
     showError(err.message);
     return;
   }
-  render();
+  renderList();
+  if (force || !isUserBusyInDetail()) renderDetail();
 }
 
 async function pollLogs() {
@@ -387,8 +540,9 @@ $("console").addEventListener("scroll", (e) => {
   state.autoscroll = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
 });
 
+hardenMaskedFields(document);
 refresh();
-setInterval(refresh, 2500);
+setInterval(() => refresh(), 2500);
 setInterval(pollLogs, 1000);
 </script>
 </body>

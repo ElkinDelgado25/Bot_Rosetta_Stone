@@ -17,6 +17,9 @@ dependencies = [
 web = [
     "fastapi>=0.115",
     "uvicorn>=0.32",
+    # Lanza un contenedor worker por usuario. Si falta, o si no hay socket,
+    # la UI cae al backend in-process (una corrida a la vez).
+    "docker>=7.1",
 ]
 
 [project.urls]

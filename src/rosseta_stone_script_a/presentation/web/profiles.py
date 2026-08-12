@@ -40,9 +40,15 @@ class Profile:
     human_mode: bool = False
     force_recomplete: bool = False
     max_paths_per_day: int = 18
-    # Learned from the first successful run. The tracking API's user_id is what
-    # names the state file, and it isn't known until a run captures it.
+    # Learned from a successful run, not asked for. The tracking API's user_id
+    # names the state file; the display name and product come from the session
+    # the browser captured on the dashboard.
     last_user_id: str | None = None
+    display_name: str | None = None
+    product: str | None = None
+    # Whether the last login had to pick the institutional account (uleam).
+    # None = never verified.
+    institution_selected: bool | None = None
 
     def public_dict(self) -> dict[str, Any]:
         """Serialise for the browser, replacing the password with a flag."""

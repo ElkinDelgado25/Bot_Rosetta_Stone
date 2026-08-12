@@ -41,14 +41,16 @@ def _require_token(request: Request) -> None:
 
 
 def create_app(
-    store: ProfileStore | None = None, state_dir: Path | None = None
+    store: ProfileStore | None = None,
+    state_dir: Path | None = None,
+    backend: Any | None = None,
 ) -> FastAPI:
     """Build the app. Injectable arguments exist so tests can use temp dirs."""
     profile_store = store or ProfileStore()
     if state_dir is None:
         settings = get_settings().rosseta_settings
         state_dir = get_base_dir() / settings.rosetta_state_dir
-    manager = RunManager(profile_store, state_dir)
+    manager = RunManager(profile_store, state_dir, backend=backend)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -68,6 +70,9 @@ def create_app(
             "run": record.public_dict(),
             "queue_position": manager.queue_position(profile.id),
             "progress": manager.progress_for(profile),
+            # Identifiers in the clear, credentials fingerprinted. The real
+            # values stay in state/sessions/<id>.json and never cross HTTP.
+            "session": manager.sessions.masked(profile.id),
         }
 
     def _get_or_404(profile_id: str):
@@ -86,7 +91,12 @@ def create_app(
 
     @app.post("/api/profiles", status_code=201, dependencies=guard)
     def create_profile(payload: ProfileIn) -> dict[str, Any]:
-        profile = profile_store.create(**payload.model_dump())
+        data = payload.model_dump()
+        # The UI only sends email and password. Name it after the mailbox until
+        # a run reports the account's real name.
+        if not data.get("name"):
+            data["name"] = data["email"].split("@")[0]
+        profile = profile_store.create(**data)
         return _profile_view(profile)
 
     @app.patch("/api/profiles/{profile_id}", dependencies=guard)
@@ -107,6 +117,8 @@ def create_app(
             raise HTTPException(
                 status_code=409, detail="No se puede borrar un perfil en ejecucion"
             )
+        # Deleting the account must take its credentials with it.
+        manager.sessions.delete(profile_id)
         return {"deleted": profile_store.delete(profile_id)}
 
     # ------------------------------------------------------------------
@@ -114,7 +126,9 @@ def create_app(
     # ------------------------------------------------------------------
 
     @app.post("/api/profiles/{profile_id}/run", dependencies=guard)
-    def start_run(profile_id: str, payload: RunIn | None = None) -> dict[str, Any]:
+    async def start_run(
+        profile_id: str, payload: RunIn | None = None
+    ) -> dict[str, Any]:
         profile = _get_or_404(profile_id)
         password = (payload.password if payload else None) or profile.password
         if not password:
@@ -130,8 +144,28 @@ def create_app(
             )
         return _profile_view(profile)
 
+    @app.post("/api/profiles/{profile_id}/verify", dependencies=guard)
+    async def verify_profile(
+        profile_id: str, payload: RunIn | None = None
+    ) -> dict[str, Any]:
+        """Log in and report what the account is, without sending anything."""
+        profile = _get_or_404(profile_id)
+        password = (payload.password if payload else None) or profile.password
+        if not password:
+            raise HTTPException(
+                status_code=400,
+                detail="Este perfil no guarda contrasena: enviala con la peticion",
+            )
+        try:
+            manager.enqueue(profile_id, password, mode="verify")
+        except RunAlreadyActive:
+            raise HTTPException(
+                status_code=409, detail="Este perfil ya tiene una corrida activa"
+            )
+        return _profile_view(profile)
+
     @app.post("/api/profiles/{profile_id}/stop", dependencies=guard)
-    def stop_run(profile_id: str) -> dict[str, Any]:
+    async def stop_run(profile_id: str) -> dict[str, Any]:
         _get_or_404(profile_id)
         stopped = manager.cancel(profile_id)
         if not stopped:
@@ -160,6 +194,8 @@ def create_app(
             "ok": True,
             "profiles": len(profile_store.list()),
             "auth_required": bool(os.getenv("ROSETTA_WEB_TOKEN", "").strip()),
+            "backend": manager.backend_name,
+            "parallel": getattr(manager.backend, "supports_parallel", False),
         }
 
     @app.get("/")

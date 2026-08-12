@@ -16,6 +16,7 @@ from rosseta_stone_script_a.infrastructure.state import (
     StateStore,
     make_path_key,
 )
+from rosseta_stone_script_a.shared import events
 
 
 class CompleteFoundationsUseCase(UseCasePort):
@@ -228,6 +229,20 @@ class CompleteFoundationsUseCase(UseCasePort):
             else:
                 self.stats.total_paths_failed += 1
                 self.stats.failed_paths.append(result)
+
+            # Structured twin of the log line above, for the web UI's
+            # per-lesson view. No-op unless ROSETTA_EVENTS is set.
+            events.emit(
+                "path_done",
+                ok=result.success,
+                course=path.course,
+                unit=path.unit_index,
+                lesson=path.lesson_index,
+                path_type=path.type,
+                index=idx + 1,
+                total=len(prepared),
+                done_total=state.total_done(),
+            )
 
             # Inter-path delay (human mode only; skipped after the last path)
             if self.human_mode and idx < len(prepared) - 1:

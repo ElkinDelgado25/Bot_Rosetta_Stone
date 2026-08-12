@@ -6,9 +6,14 @@ from pydantic import BaseModel, Field
 
 
 class ProfileIn(BaseModel):
-    """Payload for creating a profile."""
+    """Payload for creating a profile.
 
-    name: str = Field(min_length=1, max_length=60)
+    The UI only asks for email and password. Everything else keeps its default
+    and stays editable through the API for anyone who needs it.
+    """
+
+    # Omitted by the UI: derived from the email in `create_profile`.
+    name: str | None = Field(default=None, min_length=1, max_length=60)
     email: str = Field(min_length=3, max_length=200)
     password: str | None = None
     units_to_complete: list[int] = []

@@ -239,6 +239,35 @@ PlaywrightFoundationsApiAdapter (~130 líneas)
 └── CourseMenuParser (parser)
 ```
 
+## Capa de Presentación
+
+Dos fachadas sobre los mismos orquestadores. Ninguna contiene lógica de negocio:
+ambas construyen un `DependencyFactory` y delegan.
+
+```
+presentation/
+├── cli.py                  Una cuenta (la del .env), una pasada
+├── dependency_factory.py   Inyección de dependencias, compartido
+└── web/                    Varios usuarios, cola, estado por usuario
+    ├── app.py              Rutas FastAPI
+    ├── profiles.py         profiles.json (credenciales + filtros por usuario)
+    ├── run_manager.py      Cola FIFO, una corrida a la vez, buffer de logs
+    ├── models.py           Validación de payloads con pydantic
+    └── static/index.html   UI completa, sin build ni CDN
+```
+
+**Regla de dependencia:** `web/` importa de `application/` y `presentation/`,
+nunca al revés. Sustituir la UI no toca ninguna otra capa; de hecho los tests la
+ejercitan entera sustituyendo solo `RosettaCLI`.
+
+**Por qué una corrida a la vez:** cada corrida abre un navegador y escribe el
+archivo de estado de su cuenta. Dos en paralelo competirían por ambos, así que
+`RunManager` las serializa y reporta la posición en cola.
+
+**Por qué el progreso se relee del disco:** `RunProgressState` se persiste tras
+cada POST aceptado. Consultarlo en cada lectura da avance real a mitad de
+corrida y sobrevive a un reinicio, cosa que un contador en memoria no haría.
+
 ## Mejores Prácticas Aplicadas
 
 1. **Single Responsibility Principle (SRP)** ✅

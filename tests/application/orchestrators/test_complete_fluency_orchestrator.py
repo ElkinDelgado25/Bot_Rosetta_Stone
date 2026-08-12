@@ -162,7 +162,7 @@ class TestCompleteFluencyOrchestrator:
         # Pre-mark the activity as done in state.
         from rosseta_stone_script_a.infrastructure.state import RunProgressState
 
-        state = RunProgressState(tmp_path / "fluency_state.json")
+        state = RunProgressState(tmp_path / "fluency_u1.json")
         state.mark_done(fluency_activity_key("c1", "seq-a", "a1"))
         state.save()
 
@@ -183,7 +183,7 @@ class TestCompleteFluencyOrchestrator:
         assert api.attempts == 3
         from rosseta_stone_script_a.infrastructure.state import RunProgressState
 
-        reloaded = RunProgressState(tmp_path / "fluency_state.json")
+        reloaded = RunProgressState(tmp_path / "fluency_u1.json")
         assert reloaded.is_done(fluency_activity_key("c1", "seq-a", "a1"))
 
     def test_gives_up_after_max_retries(self):
@@ -216,5 +216,5 @@ class TestCompleteFluencyOrchestrator:
         _run(orch)
         from rosseta_stone_script_a.infrastructure.state import RunProgressState
 
-        reloaded = RunProgressState(tmp_path / "fluency_state.json")
+        reloaded = RunProgressState(tmp_path / "fluency_u1.json")
         assert reloaded.is_done(fluency_activity_key("c1", "seq-a", "a1"))

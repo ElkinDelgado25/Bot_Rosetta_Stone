@@ -15,7 +15,9 @@ from rosseta_stone_script_a.application.services.fluency_progress_builder import
     FluencyProgressBuilder,
 )
 from rosseta_stone_script_a.domain.entities.fluency_catalog import FluencyCatalog
+from rosseta_stone_script_a.domain.errors import SessionCaptureIncomplete
 from rosseta_stone_script_a.infrastructure.state import RunProgressState
+from rosseta_stone_script_a.shared import events
 
 
 def fluency_activity_key(course_id: str, sequence_id: str, activity_id: str) -> str:
@@ -44,14 +46,25 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         self.delay_ms = max(0, delay_ms)
         self.max_retries = max(0, max_retries)
         self.builder = builder or FluencyProgressBuilder()
-        self._state = (
-            RunProgressState(state_dir / "fluency_state.json") if state_dir else None
-        )
+        self._state_dir = state_dir
+        # Resolved in execute(), once the run knows whose account this is. A
+        # single shared file would make user B skip the activities user A
+        # completed: the keys are course|sequence|activity, with no account in
+        # them, so one user's progress reads as everyone's.
+        self._state: RunProgressState | None = None
 
     async def execute(self, captured_data: Dict[str, Any]) -> None:
         authorization = captured_data.get("authorization") or ""
         user_id = captured_data.get("user_id")
         locale = captured_data.get("lang_code")
+
+        # Without the gaia token every call below is an anonymous 401. Say so
+        # here instead of failing later with an HTTP error that hides the cause.
+        if not authorization:
+            self.logger.error("No hay authorization de gaia. No se envió nada.")
+            raise SessionCaptureIncomplete(["authorization"], product="Fluency Builder")
+
+        self._state = self._state_for(user_id, captured_data)
 
         mode = "DRY-RUN" if self.dry_run else "LIVE"
         self.logger.info(
@@ -83,6 +96,21 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
             self._state.save()
 
         await self._verify(authorization, touched)
+
+    def _state_for(
+        self, user_id: Optional[str], captured_data: Dict[str, Any]
+    ) -> Optional[RunProgressState]:
+        """One state file per account: ``fluency_<user_id>.json``.
+
+        Falls back to the account email, and only then to a shared file — the
+        same order ``StateStore`` uses for Foundations.
+        """
+        if not self._state_dir:
+            return None
+        email = (captured_data.get("credentials") or {}).get("email")
+        key = user_id or email or "default_account"
+        safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in str(key))
+        return RunProgressState(self._state_dir / f"fluency_{safe}.json")
 
     async def _complete_lesson(
         self, authorization, user_id, locale, course, seq_ref
@@ -139,6 +167,19 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
                     self._state.mark_done(key)
             else:
                 self.logger.error(f"  FAILED {activity.activity_type}")
+
+            # Structured twin of the log line above, so the web UI can show
+            # progress per lesson for Fluency too, not just Foundations.
+            events.emit(
+                "path_done",
+                ok=success,
+                course=course.title,
+                # Fluency has no unit index; the lesson title is the useful part.
+                unit=None,
+                lesson=seq_ref.title,
+                path_type=activity.activity_type,
+                done_total=self._state.total_done() if self._state else None,
+            )
 
             if self.delay_ms:
                 await asyncio.sleep(self.delay_ms / 1000)
