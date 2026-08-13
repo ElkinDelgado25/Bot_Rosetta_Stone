@@ -248,25 +248,52 @@ ambas construyen un `DependencyFactory` y delegan.
 presentation/
 ├── cli.py                  Una cuenta (la del .env), una pasada
 ├── dependency_factory.py   Inyección de dependencias, compartido
-└── web/                    Varios usuarios, cola, estado por usuario
+├── worker.py               UNA corrida; es el comando del contenedor efímero
+└── web/                    Varios usuarios, estado y tokens por usuario
     ├── app.py              Rutas FastAPI
-    ├── profiles.py         profiles.json (credenciales + filtros por usuario)
-    ├── run_manager.py      Cola FIFO, una corrida a la vez, buffer de logs
+    ├── profiles.py         profiles.json (credenciales + ajustes por usuario)
+    ├── backends.py         Dónde corre: contenedor propio o este proceso
+    ├── run_manager.py      Estado por perfil, buffer de logs, ingesta de eventos
+    ├── session_store.py    Tokens capturados, un archivo por usuario
     ├── models.py           Validación de payloads con pydantic
     └── static/index.html   UI completa, sin build ni CDN
 ```
 
 **Regla de dependencia:** `web/` importa de `application/` y `presentation/`,
 nunca al revés. Sustituir la UI no toca ninguna otra capa; de hecho los tests la
-ejercitan entera sustituyendo solo `RosettaCLI`.
+ejercitan entera inyectando un backend falso.
 
-**Por qué una corrida a la vez:** cada corrida abre un navegador y escribe el
-archivo de estado de su cuenta. Dos en paralelo competirían por ambos, así que
-`RunManager` las serializa y reporta la posición en cola.
+### Dónde se ejecuta una corrida
+
+```
+contenedor web (orquestador)          docker.sock
+  · gestiona usuarios          ──────────────────► worker usuario1  (efímero)
+  · lanza un worker por usuario                    worker usuario2  (efímero)
+  · lee su stdout              ◄──────────────────  worker usuario3  (efímero)
+```
+
+`select_backend` elige entre dos implementaciones con la misma interfaz:
+
+| | Aislamiento | Simultaneidad | Cuándo |
+|---|---|---|---|
+| `DockerBackend` | Un contenedor por corrida | Todas a la vez | La web corre en un contenedor y el socket responde |
+| `InProcessBackend` | Ninguno | Una cada vez, con cola | Ejecución local sin Docker |
+
+**Por qué el modo local sí encola:** sin contenedores, las corridas comparten
+navegador y archivo de estado; dos a la vez competirían por ambos. Con un
+contenedor por usuario ese conflicto desaparece y no hay cola.
+
+**Por qué los tokens no vuelven por stdout:** cualquiera con acceso al daemon
+puede leer los logs de un contenedor. El worker devuelve la sesión capturada en
+un archivo de resultado dentro del volumen, que se borra al terminar.
 
 **Por qué el progreso se relee del disco:** `RunProgressState` se persiste tras
 cada POST aceptado. Consultarlo en cada lectura da avance real a mitad de
 corrida y sobrevive a un reinicio, cosa que un contador en memoria no haría.
+
+**Dos canales desde el worker:** líneas de log normales, que van a la consola en
+vivo, y eventos JSON con prefijo `@@EVENT` (`shared/events.py`), que alimentan
+el avance por unidad y lección. `RunManager.ingest` los separa.
 
 ## Mejores Prácticas Aplicadas
 
