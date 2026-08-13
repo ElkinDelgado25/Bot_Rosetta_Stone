@@ -1,4 +1,6 @@
-# Rosseta-Stone-Script-A
+# Rosseta Stone Bot
+
+> por **elkindev**
 
 Bot que marca lecciones de Rosetta Stone como completadas. No las resuelve:
 obtiene el árbol del curso desde la propia plataforma, fabrica puntaje y
@@ -104,6 +106,23 @@ solo comprueba que la cuenta entra, Ejecutar sí modifica el progreso real.
 Repite por cada cuenta. Todas pueden correr a la vez, cada una aislada en su
 contenedor: si un navegador se cuelga, se lleva solo el suyo.
 
+### Cuánto completa cada corrida
+
+Por defecto, **todo lo que esté pendiente**: la ficha del usuario lo muestra como
+*Lecciones: todas las pendientes*. Si prefieres ir poco a poco, se limita por
+usuario:
+
+```bash
+curl -X PATCH http://127.0.0.1:8000/api/profiles/<id> \
+  -H "Content-Type: application/json" -d '{"fluency_max_lessons": 3}'
+```
+
+En Fluency Builder, las actividades de *Conversation Practice* con
+reconocimiento de voz **no se pueden completar** por esta vía: el servidor
+registra el intento pero deja el porcentaje en 0 porque exige una puntuación real
+de voz. Una lección que las tenga se queda en un 90-y-pico por ciento. Está
+detallado en [docs/FLUENCY_BUILDER.md](docs/FLUENCY_BUILDER.md).
+
 ---
 
 ## Opción B · Interfaz web en local, sin Docker
@@ -168,6 +187,8 @@ Van en el `.env` (o en el `environment:` del compose).
 | `ROSETTA_RUN_BACKEND` | automático | `docker` o `in-process`, para forzar el modo |
 | `BROWSER_HEADLESS` | `false` | `true` para no ver la ventana del navegador |
 | `LOG_LEVEL` | `INFO` | `DEBUG` para diagnosticar |
+| `FLUENCY_MAX_LESSONS` | `1` en la CLI, `all` desde la web | Lecciones de Fluency por corrida |
+| `FLUENCY_DRY_RUN` | `false` | `1` para construir los envíos sin mandarlos |
 
 ---
 
@@ -198,6 +219,9 @@ enteros: en la UI aparecen enmascarados.
 | `did not find executable at ...` | El Python del venv desapareció: `uv python install 3.14` y `uv sync` |
 | La corrida sale con código `3` | Login incompleto; verifica el usuario desde la UI para ver dónde se corta |
 | Un usuario dice `0 completadas` tras ejecutar | Mira el registro en vivo: si no envió nada, la sesión no se capturó |
+| Completa una lección y se detiene | Ese perfil tiene `fluency_max_lessons` puesto; sin él hace todas |
+| Una lección se queda en ~95% | Tiene actividades de voz, que no se pueden completar por API |
+| Los chips vuelven a `idle` tras reiniciar | El estado de la última corrida vive en memoria; el progreso sí persiste |
 | `Could not launch a browser` | No hay Chrome ni Edge: `uv run playwright install chromium` |
 | La UI no responde y Docker acaba de reiniciar | El contenedor arranca solo, pero con la imagen previa: reconstruye |
 
