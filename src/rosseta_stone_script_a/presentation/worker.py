@@ -91,6 +91,13 @@ def main() -> int:
 
     config_path = Path(os.environ[CONFIG_ENV])
     profile_id = config.get("profile_id", "?")
+
+    # El tope de lecciones de Fluency se lee del entorno. El orquestador ya lo
+    # pasa así, pero un worker lanzado a mano solo trae el JSON: sin esto
+    # heredaría el default del motor (1 lección) y pararía tras la primera.
+    if "fluency_max_lessons" in config and not os.getenv("FLUENCY_MAX_LESSONS"):
+        limite = config["fluency_max_lessons"]
+        os.environ["FLUENCY_MAX_LESSONS"] = "all" if not limite else str(limite)
     events.emit("run_started", profile_id=profile_id, email=config.get("email"))
 
     try:

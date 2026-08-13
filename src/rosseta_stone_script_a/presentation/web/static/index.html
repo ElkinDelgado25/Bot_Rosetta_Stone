@@ -238,10 +238,16 @@ function renderAccountFacts(profile) {
     : "sin detectar";
   const inst = profile.institution_selected === null ? "sin comprobar"
     : profile.institution_selected ? "encontrada" : "no apareció";
+  const lecciones = profile.fluency_max_lessons
+    ? `${profile.fluency_max_lessons} por corrida`
+    : "todas las pendientes";
+
   return `
     <div class="facts">
       <span><b>Producto:</b> ${escapeHtml(producto)}</span>
       <span><b>Ruta institucional:</b> ${escapeHtml(inst)}</span>
+      ${profile.product === "fluency_builder"
+        ? `<span><b>Lecciones:</b> ${escapeHtml(lecciones)}</span>` : ""}
     </div>`;
 }
 

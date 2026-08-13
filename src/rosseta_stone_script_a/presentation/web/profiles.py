@@ -40,6 +40,11 @@ class Profile:
     human_mode: bool = False
     force_recomplete: bool = False
     max_paths_per_day: int = 18
+    # Fluency: cuántas lecciones pendientes completar por corrida.
+    # None = todas. El default del motor es 1 (pensado para una primera prueba
+    # controlada desde la terminal), que desde la UI solo confunde: completaba
+    # una lección y paraba.
+    fluency_max_lessons: int | None = None
     # Learned from a successful run, not asked for. The tracking API's user_id
     # names the state file; the display name and product come from the session
     # the browser captured on the dashboard.

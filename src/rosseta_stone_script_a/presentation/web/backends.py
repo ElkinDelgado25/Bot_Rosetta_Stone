@@ -56,9 +56,21 @@ def _run_config(
         "force_recomplete": profile.force_recomplete,
         "human_mode": profile.human_mode,
         "max_paths_per_day": profile.max_paths_per_day,
+        "fluency_max_lessons": profile.fluency_max_lessons,
         "state_dir": state_dir,
         "login_url": login_url,
     }
+
+
+def fluency_limit_env(max_lessons: int | None) -> str:
+    """Traduce el límite del perfil al valor que espera el motor.
+
+    ``DependencyFactory`` lo lee de ``FLUENCY_MAX_LESSONS`` y trata "all" como
+    sin tope; su default es 1, que no es lo que la UI quiere.
+    """
+    if not max_lessons:  # None o 0
+        return "all"
+    return str(max_lessons)
 
 
 class InProcessBackend(LoggingMixin):
@@ -78,6 +90,12 @@ class InProcessBackend(LoggingMixin):
         # Log lines reach the UI through the root-logger handler the RunManager
         # installs, so nothing is pushed into `sink` here.
         from rosseta_stone_script_a.presentation.cli import RosettaCLI
+
+        # El motor lee este tope del entorno. Aquí se comparte proceso, pero
+        # este backend no ejecuta corridas en paralelo, así que no hay carrera.
+        os.environ["FLUENCY_MAX_LESSONS"] = fluency_limit_env(
+            profile.fluency_max_lessons
+        )
 
         task = asyncio.create_task(
             RosettaCLI().enter_rosetta(
@@ -205,6 +223,10 @@ class DockerBackend(LoggingMixin):
                     "BROWSER_HEADLESS": "true",
                     "BROWSER_CHANNEL": "",
                     "PYTHONUNBUFFERED": "1",
+                    # Sin esto el motor usa su default de 1 lección por corrida.
+                    "FLUENCY_MAX_LESSONS": fluency_limit_env(
+                        profile.fluency_max_lessons
+                    ),
                 },
                 volumes={host_data: {"bind": CONTAINER_DATA_DIR, "mode": "rw"}},
                 shm_size="512m",

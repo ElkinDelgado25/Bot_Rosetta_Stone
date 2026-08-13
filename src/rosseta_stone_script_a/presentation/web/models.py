@@ -23,6 +23,8 @@ class ProfileIn(BaseModel):
     human_mode: bool = False
     force_recomplete: bool = False
     max_paths_per_day: int = Field(default=18, ge=1, le=500)
+    # None = todas las lecciones pendientes (lo que quiere la UI).
+    fluency_max_lessons: int | None = Field(default=None, ge=1, le=500)
 
 
 class ProfileUpdate(BaseModel):
@@ -38,6 +40,7 @@ class ProfileUpdate(BaseModel):
     human_mode: bool | None = None
     force_recomplete: bool | None = None
     max_paths_per_day: int | None = Field(default=None, ge=1, le=500)
+    fluency_max_lessons: int | None = Field(default=None, ge=1, le=500)
 
 
 class RunIn(BaseModel):

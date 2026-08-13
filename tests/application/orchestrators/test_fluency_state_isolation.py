@@ -95,3 +95,26 @@ def test_state_survives_a_reload(tmp_path):
 
     on_disk = json.loads((tmp_path / "fluency_111.json").read_text(encoding="utf-8"))
     assert on_disk["completed_path_keys"] == ["k1"]
+
+
+def test_the_engine_default_is_one_lesson_but_all_is_selectable(monkeypatch):
+    """Documenta el tope que dejaba a medias las corridas desde la UI.
+
+    DependencyFactory lee FLUENCY_MAX_LESSONS y su default es 1: completaba una
+    lección y paraba. La capa web pasa "all" explícitamente.
+    """
+    from rosseta_stone_script_a.presentation.dependency_factory import DependencyFactory
+
+    class _Session:
+        _page = type("P", (), {"request": object()})()
+
+    factory = DependencyFactory(web_session=_Session(), rosseta_login_url="http://x")
+
+    monkeypatch.delenv("FLUENCY_MAX_LESSONS", raising=False)
+    assert factory.create_complete_fluency_orchestrator().max_lessons == 1
+
+    monkeypatch.setenv("FLUENCY_MAX_LESSONS", "all")
+    assert factory.create_complete_fluency_orchestrator().max_lessons is None
+
+    monkeypatch.setenv("FLUENCY_MAX_LESSONS", "5")
+    assert factory.create_complete_fluency_orchestrator().max_lessons == 5

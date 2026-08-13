@@ -377,6 +377,36 @@ def test_progress_reads_the_state_file(tmp_path, backend):
     assert progress["last_run"] == "1999-01-01T00:00:00Z"
 
 
+def test_a_new_profile_completes_every_pending_lesson(tmp_path, backend):
+    """El motor topa en 1 lección por corrida; la UI quiere todas."""
+    from rosseta_stone_script_a.presentation.web.backends import (
+        _run_config,
+        fluency_limit_env,
+    )
+
+    store, _ = _manager(tmp_path, backend)
+    profile = store.create(name="U", email="u@e.com", password="x")
+
+    assert profile.fluency_max_lessons is None  # None = todas
+    config = _run_config(
+        profile, "x", state_dir="/data/state", login_url="http://x", mode="run"
+    )
+    assert config["fluency_max_lessons"] is None
+    # "all" es lo que DependencyFactory interpreta como "sin tope".
+    assert fluency_limit_env(profile.fluency_max_lessons) == "all"
+
+
+def test_an_explicit_limit_is_respected(tmp_path, backend):
+    from rosseta_stone_script_a.presentation.web.backends import fluency_limit_env
+
+    store, _ = _manager(tmp_path, backend)
+    profile = store.create(name="U", email="u@e.com", password="x")
+    store.update(profile.id, fluency_max_lessons=3)
+
+    assert fluency_limit_env(store.get(profile.id).fluency_max_lessons) == "3"
+    assert fluency_limit_env(0) == "all"
+
+
 def test_progress_counts_fluency_accounts_too(tmp_path, backend):
     """A Fluency account writes fluency_<user_id>.json, not <user_id>.json."""
     store, manager = _manager(tmp_path, backend)
