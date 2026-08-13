@@ -37,17 +37,35 @@
   .card + .card { margin-top: 14px; }
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
        color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  /* Tarjeta en filas apiladas: el chip ya no comparte línea con el nombre, que
+     es lo que antes lo comprimía y partía "BRITHANY ELIZABETH PEREZ REYES" en
+     dos líneas apretadas. Ahora el nombre dispone del ancho completo. */
   .profile {
-    border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
-    margin-bottom: 8px; cursor: pointer; background: transparent;
+    border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+    margin-bottom: 10px; cursor: pointer; background: transparent;
     width: 100%; text-align: left; color: inherit; font: inherit;
+    display: grid; gap: 6px; transition: border-color .15s ease;
   }
   .profile:hover { border-color: var(--accent); }
   .profile[aria-selected="true"] { border-color: var(--accent);
        box-shadow: 0 0 0 1px var(--accent) inset; }
-  .profile .top { display: flex; align-items: center; gap: 8px; }
-  .profile .name { font-weight: 600; }
-  .profile .email, .profile .meta { color: var(--muted); font-size: 12px; }
+  .profile .name {
+    font-weight: 600; font-size: 14px; line-height: 1.35;
+    overflow-wrap: anywhere;   /* nombres largos envuelven, no desbordan */
+  }
+  .profile .email {
+    color: var(--muted); font-size: 12px; line-height: 1.35;
+    overflow-wrap: anywhere;   /* el correo se ve entero, sin recortar */
+  }
+  .profile .foot {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; flex-wrap: wrap; margin-top: 2px;
+  }
+  .profile .meta { color: var(--muted); font-size: 11.5px; }
+  .profile .tag {
+    font-size: 11px; padding: 1px 7px; border-radius: 5px;
+    border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
+  }
   .chip {
     font-size: 11px; padding: 1px 8px; border-radius: 999px;
     border: 1px solid currentColor; text-transform: uppercase;
@@ -217,6 +235,22 @@ function escapeHtml(value) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
+/* Rosetta devuelve el nombre en mayúsculas ("BRITHANY ELIZABETH PEREZ REYES").
+   Gritado ocupa más y se lee peor, así que se pasa a capitalización normal.
+   Un nombre que ya viene en mixto se deja como está. */
+function personName(nombre) {
+  const texto = String(nombre || "").trim();
+  if (!texto || texto !== texto.toUpperCase()) return texto;
+  return texto.toLowerCase().replace(/(^|[\s'-])(\p{L})/gu,
+    (_, sep, letra) => sep + letra.toUpperCase());
+}
+
+function productLabel(product) {
+  if (product === "fluency_builder") return "Fluency Builder";
+  if (product === "foundations") return "Foundations";
+  return product;
+}
+
 function statusLabel(profile) {
   const status = profile.run.status;
   const verifying = profile.run.mode === "verify";
@@ -259,13 +293,13 @@ function renderList() {
   }
   container.innerHTML = state.profiles.map((p) => `
     <button class="profile" data-id="${p.id}" aria-selected="${p.id === state.selected}">
-      <span class="top">
-        <span class="name">${escapeHtml(p.display_name || p.email)}</span>
+      ${p.display_name ? `<div class="name">${escapeHtml(personName(p.display_name))}</div>` : ""}
+      <div class="email">${escapeHtml(p.email)}</div>
+      <div class="foot">
         <span class="chip ${p.run.status}"><i class="dot"></i>${escapeHtml(statusLabel(p))}</span>
-      </span>
-      ${p.display_name ? `<div class="email">${escapeHtml(p.email)}</div>` : ""}
-      <div class="meta">${p.progress.total_done} completados · hoy ${p.progress.done_today}${
-        p.product ? " · " + escapeHtml(p.product) : ""}</div>
+        ${p.product ? `<span class="tag">${escapeHtml(productLabel(p.product))}</span>` : ""}
+      </div>
+      <div class="meta">${p.progress.total_done} completadas · hoy ${p.progress.done_today}</div>
     </button>`).join("");
 
   container.querySelectorAll(".profile").forEach((node) => {
@@ -371,10 +405,10 @@ function renderDetail() {
     : "nunca";
 
   detail.innerHTML = `
-    <h2>${escapeHtml(profile.display_name || profile.email)}</h2>
+    <h2>${escapeHtml(personName(profile.display_name) || profile.email)}</h2>
     <div class="email" style="color:var(--muted);margin-bottom:12px">
       ${escapeHtml(profile.email)}
-      ${profile.product ? " · " + escapeHtml(profile.product) : ""}
+      ${profile.product ? " · " + escapeHtml(productLabel(profile.product)) : ""}
       ${profile.has_password ? "" : " · <b>sin contraseña guardada</b>"}
     </div>
     <div class="stats">
