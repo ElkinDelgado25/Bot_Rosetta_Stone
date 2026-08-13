@@ -282,6 +282,14 @@ workspace como `fluency_builder_workspace`, pero ese use case navega a
 Foundations. Es un nombre heredado y confunde justamente donde más importa;
 conviene renombrarlo.
 
+**El motor de Fluency completa 1 lección por corrida si nadie dice otra cosa** —
+`FLUENCY_MAX_LESSONS` vale `1` por defecto en `DependencyFactory`, pensado para
+una primera prueba controlada desde la terminal. Desde la UI eso se leía como
+un fallo: completaba una lección y paraba con éxito. El perfil tiene
+`fluency_max_lessons` (None = todas) y los dos backends lo traducen con
+`fluency_limit_env()` a `"all"` antes de lanzar. El default del motor no se
+tocó: la CLI sigue siendo conservadora.
+
 **El estado de Fluency es por cuenta, no global** — las claves de actividad son
 `fluency|curso|secuencia|actividad`, **sin la cuenta dentro**. Con el antiguo
 `fluency_state.json` único, el segundo usuario veía como hechas las actividades
