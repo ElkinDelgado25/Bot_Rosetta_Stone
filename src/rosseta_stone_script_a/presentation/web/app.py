@@ -58,7 +58,7 @@ def create_app(
         yield
         await manager.shutdown()
 
-    app = FastAPI(title="Rosetta Script A", lifespan=lifespan)
+    app = FastAPI(title="Rosseta Stone Bot", lifespan=lifespan)
     app.state.store = profile_store
     app.state.manager = manager
     guard = [Depends(_require_token)]
