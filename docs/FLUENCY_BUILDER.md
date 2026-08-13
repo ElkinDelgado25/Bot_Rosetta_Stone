@@ -147,9 +147,17 @@ evaluar. El parser tolera `correct` ausente devolviendo lista vacía.
 > fabricación de respuesta **correcta** es limpia para `multipleChoice`, `cloze` y
 > `card` de gramática; **deducible** para `matching` (pares `left:right` del
 > contenido); e **incierta** para `writing` (texto libre) y `card` de vocabulario.
-> Ver `FluencyProgressBuilder`. Si la completación depende del **envío** y no del
-> **acierto** (a confirmar en la primera corrida real), esto basta para completar
-> todo; si dependiera del score, `writing`/`matching` necesitarían más trabajo.
+> Ver `FluencyProgressBuilder`.
+
+**Confirmado en corrida real (2026-08-12).** La lección *Preflight* del curso
+"Speak with Pilots and Airline Mechanics (B1)" pasó de **0% a 100%**, con las 19
+actividades al 100% (`0/19 activities still < 100%`) y `bestGrade=1`. La
+completación depende del **envío** con respuestas bien formadas, no de un acierto
+verificado del lado del servidor.
+
+Los tipos que aparecieron en ese log fueron `generic`, `sequencing` y
+`cloze-dropdowns`. `writing` y `matching` no se vieron en esa lección, así que
+siguen sin comprobarse de forma explícita.
 
 Implementación: `FluencyProgressBuilder` (arma los mensajes por tipo de step),
 `FluencyApiPort.add_progress` / adaptador (mutación), y
@@ -162,6 +170,21 @@ Knobs de seguridad (variables de entorno):
   (default `1` para una primera prueba controlada; `0`/`all` = sin límite).
 - `FLUENCY_DRY_RUN` — `1`/`true` para construir y loguear los mensajes **sin
   enviarlos**.
+
+> **Ojo con el default de 1.** Desde la terminal es deliberado, pero desde la UI
+> web se lee como un fallo: completa una lección y termina con éxito dejando el
+> resto pendientes. Por eso el perfil web tiene `fluency_max_lessons` (None =
+> todas) y los backends exportan `FLUENCY_MAX_LESSONS=all` antes de lanzar. El
+> default del motor no se cambió.
+
+### Estado: un archivo por cuenta
+
+Las claves de actividad son `fluency|curso|secuencia|actividad`, **sin la cuenta
+dentro**. Con un `fluency_state.json` único y compartido, el segundo usuario
+veía como hechas las actividades del primero y las saltaba, terminando con
+código 0 sin enviar nada. El estado vive ahora en `fluency_<user_id>.json`,
+resuelto en `execute()` porque el `user_id` no se conoce hasta que la corrida lo
+captura.
 
 ### Formato del mensaje
 
