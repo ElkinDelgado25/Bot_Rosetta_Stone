@@ -381,23 +381,10 @@ refactors y documentación.
 Extender el mecanismo de completación fabricada a productos nuevos (Fluency
 Builder u otros) también entra.
 
-**Fuera de alcance:** hacer que los envíos sean más difíciles de distinguir de
-actividad real. Es evasión de detección y no se trabaja aquí. La línea es:
-implementar la funcionalidad sí, disfrazarla no.
+## Prioridad
+
+Hacer los envios mas indetectables y que no se pueda detectar que es un bot, para esto se tendra que hacer un analisis de los envios y ver como se puede hacer mas indetectable.
 
 ### Pendiente
 
-- No hay CLI con argumentos: `main_cli()` sigue leyendo todo del `.env`.
-- El `.exe` de PyInstaller no incluye la UI web (el extra `web` es opcional a
-  propósito, para no arrastrar FastAPI al binario).
-- El literal `"uleam"` sigue hardcodeado en `login_page.py`; con otra
-  institución el login queda a medias y ahora falla con `SessionCaptureIncomplete`,
-  que es mejor que antes pero no explica la causa real.
-- La vista de avance por lección se ha probado con eventos sintéticos y con una
-  corrida real de Foundations; con Fluency los eventos son nuevos y aún no se
-  han visto en vivo.
-- `data/state/fluency_state.json.compartido.bak` es el estado global de antes
-  del arreglo. Se apartó en vez de repartirlo porque no hay forma fiable de
-  saber de qué cuenta era; se puede borrar cuando ambos usuarios hayan corrido.
-
-
+Realizar la parte de el examen de de rosseta el cual se te facilitara el examen de rosseta stone y el bot lo realizara de manera automatica y enviara los resultados al endpoint de tracking
