@@ -1,5 +1,6 @@
-from pathlib import Path
-
+from rosseta_stone_script_a.application.orchestrators.complete_exam_orchestrator import (
+    CompleteExamOrchestrator,
+)
 from rosseta_stone_script_a.application.orchestrators.complete_fluency_orchestrator import (
     CompleteFluencyOrchestrator,
 )
@@ -13,11 +14,15 @@ from rosseta_stone_script_a.application.orchestrators.open_fundations import (
     OpenFundations,
 )
 from rosseta_stone_script_a.application.ports.web import IWebSession
+from rosseta_stone_script_a.application.services.exam_solver import ExamSolver
 from rosseta_stone_script_a.application.services.fluency_session_capturer import (
     FluencySessionCapturer,
 )
 from rosseta_stone_script_a.application.services.rosetta_session_capturer import (
     RosettaSessionCapturer,
+)
+from rosseta_stone_script_a.application.use_cases.complete_exam import (
+    CompleteExamUseCase,
 )
 from rosseta_stone_script_a.application.use_cases.complete_foundations import (
     CompleteFoundationsUseCase,
@@ -27,6 +32,9 @@ from rosseta_stone_script_a.application.use_cases.go_to_foundations import (
 )
 from rosseta_stone_script_a.application.use_cases.login_rosseta import (
     LoginRossetaUseCase,
+)
+from rosseta_stone_script_a.infrastructure.adapters.exam_api.playwright_exam_api import (
+    PlaywrightExamApiAdapter,
 )
 from rosseta_stone_script_a.infrastructure.adapters.fluency_api.playwright_fluency_api import (
     PlaywrightFluencyApiAdapter,
@@ -186,4 +194,35 @@ class DependencyFactory:
 
         return CompleteFoundationsOrchestrator(
             complete_foundations_use_case=complete_foundations_use_case
+        )
+
+    def create_complete_exam_orchestrator(
+        self,
+        authorization_header: str | None = None,
+        min_delay_seconds: float = 2.0,
+        max_delay_seconds: float = 5.0,
+        dry_run: bool = False,
+    ) -> CompleteExamOrchestrator:
+        """Create CompleteExam orchestrator with dependencies."""
+        api_adapter = self._exam_api_adapter(authorization_header=authorization_header)
+        solver = ExamSolver()
+        complete_exam_use_case = CompleteExamUseCase(
+            api_port=api_adapter,
+            solver=solver,
+            min_delay_seconds=min_delay_seconds,
+            max_delay_seconds=max_delay_seconds,
+            state_dir=self.state_dir,
+            dry_run=dry_run,
+        )
+        return CompleteExamOrchestrator(complete_exam_use_case=complete_exam_use_case)
+
+    def _exam_api_adapter(
+        self, authorization_header: str | None = None
+    ) -> PlaywrightExamApiAdapter:
+        page = getattr(self.web_session, "_page", None)
+        if not page:
+            raise RuntimeError("Web session not initialized correctly")
+        return PlaywrightExamApiAdapter(
+            request_context=page.request,
+            authorization_header=authorization_header,
         )
