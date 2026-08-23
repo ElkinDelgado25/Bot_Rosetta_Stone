@@ -10,6 +10,7 @@ import asyncio
 from typing import Any, Dict, Optional
 
 from rosseta_stone_script_a.application.ports.fluency_api import FluencyApiPort
+from rosseta_stone_script_a.application.ports.fluency_speech import FluencySpeechPort
 from rosseta_stone_script_a.application.ports.orchestrator import OrchestratorPort
 from rosseta_stone_script_a.application.services.fluency_progress_builder import (
     FluencyProgressBuilder,
@@ -36,6 +37,7 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         delay_ms: int = 500,
         max_retries: int = 5,
         builder: Optional[FluencyProgressBuilder] = None,
+        speech_port: Optional[FluencySpeechPort] = None,
     ):
         super().__init__()
         self.api_port = api_port
@@ -46,6 +48,7 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         self.delay_ms = max(0, delay_ms)
         self.max_retries = max(0, max_retries)
         self.builder = builder or FluencyProgressBuilder()
+        self.speech_port = speech_port
         self._state_dir = state_dir
         # Resolved in execute(), once the run knows whose account this is. A
         # single shared file would make user B skip the activities user A
@@ -128,6 +131,7 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         )
 
         sent_attempts: dict = {}
+        ordered_activities = []
         seen_activity_ids: set = set()
         for activity in sequence.activities:
             # getSequence can list the same activityId twice (e.g. a dialogue that
@@ -136,22 +140,62 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
             if activity.activity_id in seen_activity_ids:
                 continue
             seen_activity_ids.add(activity.activity_id)
+            ordered_activities.append(activity)
+
+        total_activities = len(ordered_activities)
+        for activity_number, activity in enumerate(ordered_activities, start=1):
+            activity_label = (
+                f"{course.title} / {seq_ref.title} / {activity.activity_type}"
+            )
+            self.logger.info(
+                f"  Completing activity {activity_number}/{total_activities}: "
+                f"{activity_label} (id={activity.activity_id})"
+            )
 
             key = fluency_activity_key(
                 course.course_id, sequence.sequence_id, activity.activity_id
             )
-            if self._state and self._state.is_done(key):
-                self.logger.info(f"  activity {activity.activity_id} already done; skip")
+            is_speech = activity.activity_type == "DialogueExpressionWithReco"
+            if not is_speech and self._state and self._state.is_done(key):
+                self.logger.info(
+                    f"  Skipping activity {activity_number}/{total_activities}: "
+                    f"{activity_label} (already done)"
+                )
+                continue
+
+            if is_speech:
+                success = await self._complete_speech_activity(
+                    authorization=authorization,
+                    course=course,
+                    seq_ref=seq_ref,
+                    activity=activity,
+                )
+                if success and self._state:
+                    self._state.mark_done(key)
+                events.emit(
+                    "path_done",
+                    ok=success,
+                    course=course.title,
+                    unit=None,
+                    lesson=seq_ref.title,
+                    path_type=activity.activity_type,
+                    done_total=self._state.total_done() if self._state else None,
+                )
                 continue
 
             messages = self.builder.build_activity_messages(sequence, activity)
             if not messages:
+                self.logger.warning(
+                    f"  Skipping activity {activity_number}/{total_activities}: "
+                    f"{activity_label} (no steps to send)"
+                )
                 continue
 
             if self.dry_run:
                 self.logger.info(
-                    f"  [DRY-RUN] {activity.activity_type} "
-                    f"activity={activity.activity_id} -> {len(messages)} messages"
+                    f"  [DRY-RUN] Would update activity "
+                    f"{activity_number}/{total_activities}: {activity_label} "
+                    f"({len(messages)} steps)"
                 )
                 continue
 
@@ -160,13 +204,18 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
             )
             if success:
                 self.logger.info(
-                    f"  sent {activity.activity_type} ({len(messages)} steps)"
+                    f"  Successfully updated activity "
+                    f"{activity_number}/{total_activities}: {activity_label} "
+                    f"({len(messages)} steps)"
                 )
                 sent_attempts[activity.activity_id] = messages[0]["activityAttemptId"]
                 if self._state:
                     self._state.mark_done(key)
             else:
-                self.logger.error(f"  FAILED {activity.activity_type}")
+                self.logger.error(
+                    f"  FAILED activity {activity_number}/{total_activities}: "
+                    f"{activity_label}"
+                )
 
             # Structured twin of the log line above, so the web UI can show
             # progress per lesson for Fluency too, not just Foundations.
@@ -186,15 +235,54 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
 
         return sent_attempts
 
+    async def _complete_speech_activity(
+        self, *, authorization, course, seq_ref, activity
+    ) -> bool:
+        if self.dry_run:
+            self.logger.info("  [DRY-RUN] Would complete conversation in browser")
+            return False
+        if not self.speech_port:
+            self.logger.warning(
+                "  Skipping conversation: browser speech automation is disabled"
+            )
+            return False
+
+        self.logger.info(
+            "  Completing conversation through browser speech recognition "
+            "(%d steps)",
+            len(activity.steps),
+        )
+        browser_ok = await self.speech_port.complete_activity(
+            course_title=course.title,
+            lesson_title=seq_ref.title,
+            activity_id=activity.activity_id,
+            expected_steps=len(activity.steps),
+        )
+        if not browser_ok:
+            return False
+
+        progress = await self.api_port.get_progress(authorization, course.course_id)
+        seq = self._find_sequence(progress, seq_ref.sequence_id)
+        if not seq:
+            self.logger.error("  Speech verification could not find the lesson")
+            return False
+        for item in seq.get("activities") or []:
+            if item.get("activityId") == activity.activity_id:
+                complete = (item.get("percentComplete") or 0.0) >= 1.0
+                self.logger.info(
+                    "  Speech verification: percentComplete=%s bestGrade=%s",
+                    item.get("percentComplete"),
+                    item.get("bestGrade"),
+                )
+                return complete
+        self.logger.error("  Speech verification could not find the activity")
+        return False
+
     async def _send_activity(self, authorization, user_id, activity, messages) -> bool:
         """Send an activity's step messages in a single batched call.
 
-        Note: speech "Conversation Practice" activities (DialogueExpressionWithReco)
-        cannot be completed this way — the server records the attempt but keeps the
-        activity at percentComplete 0 because it requires a real speech-recognition
-        score. Confirmed against a manual capture (identical message, per-step
-        submission, and integer score all leave it at 0); not solvable via the API.
-        Lessons with one cap in the low-to-mid 90s%. See docs/FLUENCY_BUILDER.md.
+        Speech activities are routed through ``speech_port`` before reaching this
+        method because Gaia ignores fabricated recognition scores.
         """
         result = await self._send_with_retry(authorization, user_id, messages)
         if not result.success and not result.rate_limited:

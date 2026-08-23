@@ -252,7 +252,7 @@ puerto `FluencyApiPort` (`application/ports/`). Las respuestas crudas se vuelcan
 ## Límite confirmado: Conversation Practice (voz)
 
 `DialogueExpressionWithReco` ("Prácticas de conversación") **no se puede completar
-por la API.** El servidor acepta y registra el `AddProgress` (sube `attempts`) pero
+solo por la API.** El servidor acepta y registra el `AddProgress` (sube `attempts`) pero
 deja la actividad en `percentComplete=0, bestGrade=0`. Se comprobó contra una
 captura manual real:
 
@@ -263,10 +263,11 @@ captura manual real:
 - El `score` entero (no float) tampoco.
 
 Requiere el puntaje real del reconocimiento de voz (micrófono), que ocurre en el
-navegador y no se puede fabricar. **No hay endpoint de audio separado**; el reco es
-local. Consecuencia: **cada lección con una conversación hablada queda en ~90-97%**
-(tope), no en 100%. Afecta sobre todo a "Focused Skills: Speaking & Listening".
-El resto de actividades sí llega al 100%.
+navegador. **No hay endpoint de audio separado**; el reco es local. El orquestador
+ahora abre la actividad con Playwright, dirige el audio nativo de la respuesta a un
+micrófono virtual dentro de la página y deja que el reproductor genere el resultado.
+Solo persiste la actividad cuando `getProgress` confirma `percentComplete=1`. Puede
+desactivarse con `FLUENCY_SPEECH_BROWSER=0`.
 
 ## Pendiente / parcial
 

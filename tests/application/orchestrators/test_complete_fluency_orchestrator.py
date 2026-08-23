@@ -127,6 +127,66 @@ class _RateLimitedApi(_FakeApi):
         return await super().add_progress(authorization, user_id, messages)
 
 
+class _SpeechApi(_FakeApi):
+    def __init__(self, complete_after=True):
+        super().__init__(["seq-a"])
+        self._speech_complete = complete_after
+
+    async def get_sequence(self, authorization, course_id, sequence_id, locale=None):
+        return FluencySequence(
+            sequence_id=sequence_id,
+            course_id=course_id,
+            title="Lesson seq-a",
+            version=1,
+            activities=[
+                FluencyActivity(
+                    "voice-a",
+                    "DialogueExpressionWithReco",
+                    "practice",
+                    "tree",
+                    [
+                        FluencyStep("speech-1", "multipleChoice", ["answer-1"]),
+                        FluencyStep("speech-2", "multipleChoice", ["answer-2"]),
+                    ],
+                )
+            ],
+        )
+
+    async def get_progress(self, authorization, course_id):
+        pct = 1.0 if self._speech_complete else 0.0
+        return [
+            {
+                "courseId": course_id,
+                "sequences": [
+                    {
+                        "sequenceId": "seq-a",
+                        "percentComplete": pct,
+                        "bestGrade": pct,
+                        "countOfActivities": 1,
+                        "activities": [
+                            {
+                                "activityId": "voice-a",
+                                "percentComplete": pct,
+                                "bestGrade": pct,
+                                "attempts": [],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+
+
+class _SpeechSpy:
+    def __init__(self, succeeds=True):
+        self.succeeds = succeeds
+        self.calls = []
+
+    async def complete_activity(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.succeeds
+
+
 class TestCompleteFluencyOrchestrator:
     def test_respects_max_lessons(self):
         api = _FakeApi(["seq-a", "seq-b", "seq-c"])
@@ -218,3 +278,46 @@ class TestCompleteFluencyOrchestrator:
 
         reloaded = RunProgressState(tmp_path / "fluency_u1.json")
         assert reloaded.is_done(fluency_activity_key("c1", "seq-a", "a1"))
+
+    def test_speech_activity_uses_browser_and_not_add_progress(self, tmp_path):
+        api = _SpeechApi(complete_after=True)
+        speech = _SpeechSpy()
+        orch = CompleteFluencyOrchestrator(
+            api_port=api,
+            speech_port=speech,
+            state_dir=tmp_path,
+            max_lessons=None,
+        )
+
+        _run(orch)
+
+        assert api.add_progress_calls == []
+        assert speech.calls == [
+            {
+                "course_title": "Course",
+                "lesson_title": "Lesson seq-a",
+                "activity_id": "voice-a",
+                "expected_steps": 2,
+            }
+        ]
+        from rosseta_stone_script_a.infrastructure.state import RunProgressState
+
+        state = RunProgressState(tmp_path / "fluency_u1.json")
+        assert state.is_done(fluency_activity_key("c1", "seq-a", "voice-a"))
+
+    def test_speech_activity_is_not_saved_without_authoritative_completion(self, tmp_path):
+        api = _SpeechApi(complete_after=False)
+        speech = _SpeechSpy()
+        orch = CompleteFluencyOrchestrator(
+            api_port=api,
+            speech_port=speech,
+            state_dir=tmp_path,
+            max_lessons=None,
+        )
+
+        _run(orch)
+
+        from rosseta_stone_script_a.infrastructure.state import RunProgressState
+
+        state = RunProgressState(tmp_path / "fluency_u1.json")
+        assert not state.is_done(fluency_activity_key("c1", "seq-a", "voice-a"))
