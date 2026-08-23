@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from rosseta_stone_script_a.domain.entities.credentials import Credentials
+from rosseta_stone_script_a.domain.errors import SessionCaptureIncomplete
 from rosseta_stone_script_a.domain.values.rosetta_product import RosettaProduct
 from rosseta_stone_script_a.infrastructure.adapters.web import PlaywrightBrowserProvider
 from rosseta_stone_script_a.infrastructure.core import get_base_dir, get_settings
@@ -105,6 +106,17 @@ class RosettaCLI(LoggingMixin):
                     self.logger.info("Account uses Fluency Builder; running write phase")
                     complete_fluency = factory.create_complete_fluency_orchestrator()
                     await complete_fluency.execute(captured_data)
+                elif product == RosettaProduct.EXAM.value:
+                    self.logger.info("Account requires Placement/Screener Exam; running automated exam")
+                    complete_exam = factory.create_complete_exam_orchestrator(
+                        authorization_header=captured_data.get("authorization")
+                    )
+                    assessment_id = captured_data.get("assessment_id")
+                    if not assessment_id:
+                        raise SessionCaptureIncomplete(
+                            missing=["assessment_id"], product="Exam / Assessment"
+                        )
+                    await complete_exam.execute(assessment_id=assessment_id)
                 else:
                     complete_foundations = (
                         factory.create_complete_foundations_orchestrator()

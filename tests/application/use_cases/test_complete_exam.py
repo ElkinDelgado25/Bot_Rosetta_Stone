@@ -13,6 +13,7 @@ from rosseta_stone_script_a.domain.entities.exam import (
     ExamStep,
     ExamStepResult,
 )
+from rosseta_stone_script_a.domain.errors import ExamResponseIncomplete
 
 
 class FakeExamApiAdapter(IExamApiPort):
@@ -86,6 +87,7 @@ def test_complete_exam_flow(tmp_path):
 
     fake_api = FakeExamApiAdapter()
     solver = ExamSolver()
+    solver._verified_answers["step_q2"] = "opt_watch"
     use_case = CompleteExamUseCase(
         api_port=fake_api,
         solver=solver,
@@ -110,3 +112,91 @@ def test_complete_exam_flow(tmp_path):
     # Check persistence
     persisted_file = tmp_path / "exams" / "exam_test_assessment_123.json"
     assert persisted_file.exists()
+
+
+def test_complete_exam_bootstrap_flow(tmp_path):
+    import asyncio
+
+    fake_api = FakeExamApiAdapter()
+    solver = ExamSolver()
+    solver._verified_answers["step_q2"] = "opt_watch"
+    use_case = CompleteExamUseCase(
+        api_port=fake_api,
+        solver=solver,
+        min_delay_seconds=0.001,
+        max_delay_seconds=0.002,
+        state_dir=tmp_path,
+    )
+
+    result = asyncio.run(
+        use_case.execute(
+            assessment_id="test_assessment_bootstrap",
+            initial_activity_id=None,
+        )
+    )
+
+    assert result.is_complete
+    assert result.score is not None
+    assert result.score.score == 350
+    assert fake_api.call_count == 2
+    assert fake_api.submissions[0]["activity_id"] is None
+
+
+def test_exam_step_parser_and_solver_har_compatibility():
+    import json
+    from pathlib import Path
+    from rosseta_stone_script_a.infrastructure.adapters.exam_api.exam_step_parser import (
+        ExamStepParser,
+    )
+
+    har_path = (
+        Path(__file__).resolve().parents[3]
+        / "hars"
+        / "login.rosettastone.com.har"
+    )
+    if not har_path.exists():
+        pytest.skip("HAR file not present for dataset test")
+
+    with open(har_path, encoding="utf-8") as f:
+        har = json.load(f)
+
+    solver = ExamSolver()
+    activities_tested = 0
+    final_score_found = False
+
+    for e in har["log"]["entries"]:
+        url = e["request"]["url"]
+        if "gaia-server.rosettastone.com" in url and e["request"]["method"] == "POST":
+            resp = json.loads(e["response"].get("content", {}).get("text", "{}"))
+            result = ExamStepParser.parse_step_response(resp.get("data", {}))
+
+            if result.activity:
+                answers = solver.solve_activity(result.activity)
+                assert len(answers) == len(result.activity.steps)
+                activities_tested += 1
+
+            if result.is_complete and result.score:
+                final_score_found = True
+                assert result.score.score == 167
+                assert result.score.cefr == "A2"
+
+    assert activities_tested == 66
+    assert final_score_found
+
+
+def test_incomplete_api_response_is_not_reported_as_success(tmp_path):
+    import asyncio
+
+    class EmptyApi(IExamApiPort):
+        async def submit_step(self, **kwargs):
+            return ExamStepResult(assessment_name="", form_number=0)
+
+    use_case = CompleteExamUseCase(
+        api_port=EmptyApi(),
+        min_delay_seconds=0,
+        max_delay_seconds=0,
+        state_dir=tmp_path,
+    )
+
+    with pytest.raises(ExamResponseIncomplete):
+        asyncio.run(use_case.execute(assessment_id="123"))

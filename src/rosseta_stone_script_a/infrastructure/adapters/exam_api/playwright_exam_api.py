@@ -85,8 +85,8 @@ class PlaywrightExamApiAdapter(IExamApiPort, LoggingMixin):
     async def submit_step(
         self,
         assessment_id: str,
-        activity_id: str,
-        answers: List[ExamAnswer],
+        activity_id: Optional[str] = None,
+        answers: Optional[List[ExamAnswer]] = None,
         user_agent: Optional[str] = None,
         screen_width: int = 1378,
         screen_height: int = 1181,
@@ -98,23 +98,23 @@ class PlaywrightExamApiAdapter(IExamApiPort, LoggingMixin):
             "Chrome/124.0.0.0 Safari/537.36"
         )
 
-        formatted_answers = [
-            {"activityStepId": a.activity_step_id, "contentId": a.content_id}
-            for a in answers
-        ]
+        message: Dict[str, Any] = {
+            "assessmentId": str(assessment_id),
+            "userAgent": ua,
+            "screenWidth": screen_width,
+            "screenHeight": screen_height,
+        }
+        if activity_id:
+            message["activityId"] = str(activity_id)
+            if answers:
+                message["answers"] = [
+                    {"activityStepId": a.activity_step_id, "contentId": a.content_id}
+                    for a in answers
+                ]
 
         payload = {
             "operationName": "insertAssessmentStep",
-            "variables": {
-                "message": {
-                    "assessmentId": str(assessment_id),
-                    "userAgent": ua,
-                    "screenWidth": screen_width,
-                    "screenHeight": screen_height,
-                    "activityId": str(activity_id),
-                    "answers": formatted_answers,
-                }
-            },
+            "variables": {"message": message},
             "query": INSERT_ASSESSMENT_STEP_MUTATION,
         }
 
@@ -128,7 +128,7 @@ class PlaywrightExamApiAdapter(IExamApiPort, LoggingMixin):
         self.logger.debug(
             "[ExamApi] Submitting step for activity %s with %d answers",
             activity_id,
-            len(answers),
+            len(answers or []),
         )
 
         try:

@@ -18,7 +18,7 @@ class CompleteExamOrchestrator(OrchestratorPort):
     async def execute(
         self,
         assessment_id: str,
-        initial_activity_id: str,
+        initial_activity_id: Optional[str] = None,
         user_agent: Optional[str] = None,
     ) -> ExamStepResult:
         """Execute the full automated exam lifecycle."""

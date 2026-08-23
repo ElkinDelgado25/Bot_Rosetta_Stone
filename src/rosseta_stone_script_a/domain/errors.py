@@ -29,3 +29,24 @@ class SessionCaptureIncomplete(RosettaError):
             f"faltan: {', '.join(self.missing)}. "
             "No se envió nada: revisa las credenciales y el login."
         )
+
+
+class ExamAnswerUnavailable(RosettaError):
+    """No verified or deterministic answer exists for an exam question."""
+
+    def __init__(self, activity_step_id: str) -> None:
+        self.activity_step_id = activity_step_id
+        super().__init__(
+            "No existe una respuesta verificada para la pregunta "
+            f"{activity_step_id}. El examen se detuvo sin adivinar."
+        )
+
+
+class ExamResponseIncomplete(RosettaError):
+    """Gaia returned neither another activity nor an explicit final result."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "La API del examen devolvió una respuesta incompleta: no contiene "
+            "otra actividad ni un resultado final confirmado."
+        )

@@ -12,7 +12,8 @@ from rosseta_stone_script_a.domain.entities.exam import (
     ExamScore,
     ExamStepResult,
 )
-from rosseta_stone_script_a.domain.errors import RosettaError
+from rosseta_stone_script_a.domain.errors import ExamResponseIncomplete
+from rosseta_stone_script_a.shared import events
 from rosseta_stone_script_a.shared.mixins.loggin_mixin import LoggingMixin
 
 
@@ -38,7 +39,7 @@ class CompleteExamUseCase(LoggingMixin):
     async def execute(
         self,
         assessment_id: str,
-        initial_activity_id: str,
+        initial_activity_id: Optional[str] = None,
         user_agent: Optional[str] = None,
     ) -> ExamStepResult:
         """Run the complete assessment loop until test is complete."""
@@ -105,9 +106,18 @@ class CompleteExamUseCase(LoggingMixin):
                     p.no_of_questions,
                     step_count,
                 )
+                events.emit(
+                    "path_done",
+                    ok=True,
+                    course="Placement Exam",
+                    unit=f"Section {p.section}",
+                    lesson=f"Question {p.question_no}/{p.no_of_questions}",
+                    path_type=result.activity.activity_type if result.activity else "ExamStep",
+                    done_total=step_count,
+                )
 
             # Check if exam is completed
-            if result.is_complete or result.activity is None:
+            if result.is_complete:
                 self.logger.info("Exam completed successfully!")
                 if result.score:
                     s = result.score
@@ -127,18 +137,13 @@ class CompleteExamUseCase(LoggingMixin):
                     self._persist_result(assessment_id, result.score)
                 return result
 
+            if result.activity is None:
+                raise ExamResponseIncomplete()
+
             # Set next activity ID for next iteration
             current_activity_id = result.activity.activity_id
 
-        self.logger.warning(
-            "Exam loop terminated after %d steps without explicit completion.",
-            step_count,
-        )
-        return last_result or ExamStepResult(
-            assessment_name="unknown",
-            form_number=-1,
-            is_complete=False,
-        )
+        raise ExamResponseIncomplete()
 
     def _persist_result(self, assessment_id: str, score: ExamScore) -> None:
         """Persist final exam score to state directory."""

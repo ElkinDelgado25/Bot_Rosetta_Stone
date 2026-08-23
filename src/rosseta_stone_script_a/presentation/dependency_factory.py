@@ -45,6 +45,9 @@ from rosseta_stone_script_a.infrastructure.adapters.foundations_api.playwright_f
 from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.dashboard_page import (
     DashboardPage,
 )
+from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+    PlaywrightFluencySpeechPage,
+)
 from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.login_page import (
     LoginPage,
 )
@@ -149,6 +152,7 @@ class DependencyFactory:
 
         return CompleteFluencyOrchestrator(
             api_port=self._fluency_api_adapter(),
+            speech_port=self._fluency_speech_adapter(),
             state_dir=self.state_dir,
             max_lessons=max_lessons,
             dry_run=dry_run,
@@ -156,6 +160,17 @@ class DependencyFactory:
             lesson_filter=os.getenv("FLUENCY_LESSON") or None,
             delay_ms=delay_ms,
         )
+
+    def _fluency_speech_adapter(self) -> PlaywrightFluencySpeechPage | None:
+        import os
+
+        enabled = os.getenv("FLUENCY_SPEECH_BROWSER", "1").strip().lower()
+        if enabled in ("0", "false", "no", "off"):
+            return None
+        page = getattr(self.web_session, "_page", None)
+        if not page:
+            raise RuntimeError("Web session not initialized correctly")
+        return PlaywrightFluencySpeechPage(page)
 
     def _fluency_api_adapter(self) -> PlaywrightFluencyApiAdapter:
         page = getattr(self.web_session, "_page", None)

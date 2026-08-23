@@ -11,8 +11,8 @@ class IExamApiPort(ABC):
     async def submit_step(
         self,
         assessment_id: str,
-        activity_id: str,
-        answers: List[ExamAnswer],
+        activity_id: Optional[str] = None,
+        answers: Optional[List[ExamAnswer]] = None,
         user_agent: Optional[str] = None,
         screen_width: int = 1378,
         screen_height: int = 1181,
