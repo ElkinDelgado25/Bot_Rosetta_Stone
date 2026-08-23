@@ -15,6 +15,9 @@ wheels/
 debug/
 logs/
 
+# Network captures can contain authentication headers and session data.
+/hars/
+
 # Runtime state generated at the repository root. Keep source packages named
 # "state" trackable (for example, infrastructure/state/).
 /state/

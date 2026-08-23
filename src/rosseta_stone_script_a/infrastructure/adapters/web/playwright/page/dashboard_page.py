@@ -25,14 +25,16 @@ class DashboardPage(DashboardPagePort):
         # Selectors for Foundations navigation
         self.FOUNDATIONS_BTN = Selector.by_text(LessonPatterns.FOUNDATIONS)
         self.FLUENCY_BUILDER_BTN = Selector.by_text(LessonPatterns.FLUENCY_BUILDER)
+        self.EXAM_BTN = Selector.by_text(LessonPatterns.EXAM)
         # Selector for user name on dashboard
         self.USER_NAME_SELECTOR = Selector.by_css('[data-qa="DashboardUserName"]')
 
     async def detect_product(self) -> RosettaProduct:
         """Detect which product this account offers, without navigating or failing.
 
-        Checks for the Foundations entry point first, then Fluency Builder. Returns
-        UNKNOWN if neither is present (e.g. an unexpected dashboard layout).
+        Checks for Foundations, Fluency Builder, or Exam/Assessment entry point.
+        Unknown pages remain unknown so a transient login or DOM failure cannot
+        start an assessment accidentally.
         """
         self.logger.info("Detecting product on dashboard")
         if await self.web_session.interactor.exists(self.FOUNDATIONS_BTN, timeout=2000):
@@ -43,6 +45,17 @@ class DashboardPage(DashboardPagePort):
         ):
             self.logger.info("Detected product: Fluency Builder")
             return RosettaProduct.FLUENCY_BUILDER
+        if await self.web_session.interactor.exists(self.EXAM_BTN, timeout=2000):
+            self.logger.info("Detected product: Exam / Assessment")
+            return RosettaProduct.EXAM
+
+        # Check if the page URL already points to an assessment
+        page = getattr(self.web_session, "_page", None)
+        current_url = page.url if page else ""
+        if "assessment" in current_url or "screener" in current_url:
+            self.logger.info("Detected product: Exam / Assessment (from URL: %s)", current_url)
+            return RosettaProduct.EXAM
+
         self.logger.warning("No known product entry point found on dashboard")
         return RosettaProduct.UNKNOWN
 
@@ -83,6 +96,19 @@ class DashboardPage(DashboardPagePort):
         except Exception as e:
             self.logger.error(f"Failed to navigate to Fluency Builder: {e}")
             raise RuntimeError(f"Failed to navigate to Fluency Builder: {e}")
+
+    async def open_exam(self) -> None:
+        """Navigate into Exam / Assessment from dashboard."""
+        self.logger.info("Attempting to open Exam / Assessment from dashboard")
+        try:
+            if await self.web_session.interactor.exists(self.EXAM_BTN, timeout=2000):
+                await self.web_session.interactor.click(self.EXAM_BTN)
+                self.logger.info("Successfully clicked Exam button")
+            else:
+                self.logger.info("No explicit Exam button to click, proceeding to session capture")
+        except Exception as e:
+            self.logger.error(f"Failed to open Exam / Assessment: {e}")
+            raise RuntimeError(f"Failed to open Exam / Assessment: {e}") from e
 
     async def get_user_name(self) -> Optional[str]:
         """Get the user's name displayed on the dashboard."""

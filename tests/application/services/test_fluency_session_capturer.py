@@ -59,3 +59,21 @@ class TestFluencySessionCapturer:
             )
         )
         assert cap.get_captured_data()["user_id"] is None
+
+    def test_exam_capture_requires_authorization_and_assessment_id(self):
+        cap = FluencySessionCapturer()
+        base = "https://gaia-server.rosettastone.com/graphql"
+        cap.handle_request(_Req(base, headers={"authorization": "Bearer token"}))
+
+        assert cap.is_complete() is True
+        assert cap.is_exam_complete() is False
+        assert cap.get_exam_missing_keys() == ["assessment_id"]
+
+        cap.handle_request(
+            _Req(
+                base,
+                post_data='{"variables":{"message":{"assessmentId":"12345"}}}',
+            )
+        )
+        assert cap.is_exam_complete() is True
+        assert cap.get_exam_missing_keys() == []

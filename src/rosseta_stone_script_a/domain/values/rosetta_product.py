@@ -11,4 +11,5 @@ class RosettaProduct(str, Enum):
 
     FOUNDATIONS = "foundations"
     FLUENCY_BUILDER = "fluency_builder"
+    EXAM = "exam"
     UNKNOWN = "unknown"

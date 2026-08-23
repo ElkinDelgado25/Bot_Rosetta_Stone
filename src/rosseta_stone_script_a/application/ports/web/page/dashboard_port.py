@@ -29,6 +29,11 @@ class DashboardPagePort(ABC, LoggingMixin):
         ...
 
     @abstractmethod
+    async def open_exam(self) -> None:
+        """Navigate into the Exam / Assessment from the dashboard."""
+        ...
+
+    @abstractmethod
     async def get_user_name(self) -> Optional[str]:
         """Get the user's name displayed on the dashboard."""
         ...

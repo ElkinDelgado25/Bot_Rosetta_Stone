@@ -23,6 +23,7 @@ class LessonPatterns:
     # message instead of a misleading "selector not found".
     FLUENCY_BUILDER = cci(r"fluency\s*builder")
 
-
+    # Exam / Placement / Screener assessment patterns
+    EXAM = cci(r"assessment|screener|placement|examen|evaluaci[oó]n|diagn[oó]stico")
 
     LAUNCH_COURSE_BUTTON = "LaunchCourseButton"

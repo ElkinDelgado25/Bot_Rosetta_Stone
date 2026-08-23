@@ -16,6 +16,7 @@ from rosseta_stone_script_a.application.use_cases.login_rosseta import (
     LoginRossetaUseCase,
 )
 from rosseta_stone_script_a.domain.entities.credentials import Credentials
+from rosseta_stone_script_a.domain.errors import SessionCaptureIncomplete
 from rosseta_stone_script_a.domain.values.rosetta_product import RosettaProduct
 
 
@@ -79,9 +80,12 @@ class OpenFundations(OrchestratorPort):
         product = self.navigate_use_case.product
 
         # Step 3: Wait for the session data the detected product needs
-        if product == RosettaProduct.FLUENCY_BUILDER:
+        if product in (RosettaProduct.FLUENCY_BUILDER, RosettaProduct.EXAM):
+            label = "Exam / Assessment (gaia)" if product == RosettaProduct.EXAM else "Fluency Builder (gaia)"
             await self._wait_for_capture(
-                self.fluency_capturer, "Fluency Builder (gaia)"
+                self.fluency_capturer,
+                label,
+                require_exam_data=product == RosettaProduct.EXAM,
             )
             captured_data = dict(self.fluency_capturer.get_captured_data())
         else:
@@ -115,13 +119,20 @@ class OpenFundations(OrchestratorPort):
         self.logger.info(f"Product entry workflow completed ({product.value})")
         return captured_data
 
-    async def _wait_for_capture(self, capturer, label: str) -> None:
+    async def _wait_for_capture(
+        self, capturer, label: str, require_exam_data: bool = False
+    ) -> None:
         """Poll until ``capturer.is_complete()`` or the timeout elapses."""
         self.logger.info(f"Waiting for {label} session capture to complete...")
 
         elapsed = 0.0
         while elapsed < self.MAX_CAPTURE_WAIT_SECONDS:
-            if capturer.is_complete():
+            complete = (
+                capturer.is_exam_complete()
+                if require_exam_data
+                else capturer.is_complete()
+            )
+            if complete:
                 self.logger.info(
                     f"{label} session data captured after {elapsed:.1f}s"
                 )
@@ -130,12 +141,14 @@ class OpenFundations(OrchestratorPort):
             await asyncio.sleep(self.CAPTURE_POLL_INTERVAL_SECONDS)
             elapsed += self.CAPTURE_POLL_INTERVAL_SECONDS
 
-        missing = (
-            capturer.get_missing_keys()
-            if hasattr(capturer, "get_missing_keys")
-            else "unknown"
-        )
-        self.logger.warning(
+        if require_exam_data:
+            missing = capturer.get_exam_missing_keys()
+        elif hasattr(capturer, "get_missing_keys"):
+            missing = capturer.get_missing_keys()
+        else:
+            missing = ["authorization"]
+        self.logger.error(
             f"{label} session capture timeout "
             f"({self.MAX_CAPTURE_WAIT_SECONDS}s). Missing data: {missing}"
         )
+        raise SessionCaptureIncomplete(missing=missing, product=label)

@@ -26,6 +26,7 @@ SESSION_KEYS = (
     "school_id",
     "user_id",
     "lang_code",
+    "assessment_id",
     "product",
 )
 

@@ -38,6 +38,9 @@ class GoToFundationsUseCase(UseCasePort):
         elif self.product == RosettaProduct.FLUENCY_BUILDER:
             await self.dashboard_page.open_fluency_builder()
             screenshot = "fluency_builder_workspace"
+        elif self.product == RosettaProduct.EXAM:
+            await self.dashboard_page.open_exam()
+            screenshot = "exam_workspace"
         else:
             raise RuntimeError(
                 "Dashboard offers no known product (neither Foundations nor "
