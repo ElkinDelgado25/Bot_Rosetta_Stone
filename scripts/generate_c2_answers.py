@@ -14,7 +14,7 @@ for q in questions:
     step_id = q["step_id"]
     prompt = q.get("prompt", "")
     options = q.get("options", [])
-    
+
     # 1. Direct prompt matching for 100% accuracy
     if "I ____ like to cook." in prompt:
         opt = next(o for o in options if o["text"] == "don't")
@@ -67,7 +67,7 @@ for q in questions:
     elif "waiting in line to mail a gift" in prompt:
         opt = next(o for o in options if "She is in the post office" in o["text"])
         c2_answers[step_id] = opt["id"]
-        
+
     # Section 2
     elif "After we finish the job, we ____ go home." in prompt:
         opt = next(o for o in options if o["text"] == "can")
@@ -117,7 +117,7 @@ for q in questions:
     elif "Kate thought it might be a good idea" in prompt:
         opt = next(o for o in options if "She hasn’t ordered new computers yet" in o["text"])
         c2_answers[step_id] = opt["id"]
-        
+
     # Section 3
     elif "Ericka decided to ____ the instructions" in prompt:
         opt = next(o for o in options if o["text"] == "ignore")

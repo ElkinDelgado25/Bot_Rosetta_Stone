@@ -226,7 +226,7 @@ class ExamSolver(LoggingMixin):
         try:
             self.diagnostics_dir.mkdir(parents=True, exist_ok=True)
             dump_file = self.diagnostics_dir / "unverified_exam_questions.json"
-            
+
             existing: List[Dict[str, Any]] = []
             if dump_file.exists():
                 try:
@@ -255,4 +255,3 @@ class ExamSolver(LoggingMixin):
                     json.dump(existing, f, indent=2, ensure_ascii=False)
         except Exception as e:
             self.logger.debug("[ExamSolver] Could not dump unverified question: %s", e)
-

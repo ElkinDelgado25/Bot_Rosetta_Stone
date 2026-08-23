@@ -15,20 +15,20 @@ for idx, e in enumerate(har["log"]["entries"]):
     if "gaia-server.rosettastone.com" in url and req["method"] == "POST":
         body = json.loads(req.get("postData", {}).get("text", "{}"))
         resp = json.loads(e["response"].get("content", {}).get("text", "{}"))
-        
+
         msg = body.get("variables", {}).get("message", {})
         step_data = resp.get("data", {}).get("assessmentStep", {})
-        
+
         act = step_data.get("activity") or {}
         prog = step_data.get("progress") or {}
         score = step_data.get("score") or {}
-        
+
         if act.get("activityType"):
             activity_types.add(act["activityType"])
 
         for ans in msg.get("answers", []):
             all_answers[ans["activityStepId"]] = ans["contentId"]
-            
+
         p_str = f"Q{prog.get('questionNo')}/{prog.get('noOfQuestions')} (sec {prog.get('section')})" if prog else "None"
         steps_summary.append({
             "step_num": len(steps_summary) + 1,

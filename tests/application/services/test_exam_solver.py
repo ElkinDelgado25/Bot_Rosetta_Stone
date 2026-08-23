@@ -12,11 +12,11 @@ def test_solver_uses_verified_answers():
     solver = ExamSolver()
     # Use known step ID from our extracted HAR bank
     known_step_id = "ed786919-2b37-4cd6-bb33-91cfdd0942d3"
-    
+
     # Check if known_step_id exists in verified answers
     if known_step_id in solver._verified_answers:
         expected_content_id = solver._verified_answers[known_step_id]
-        
+
         step = ExamStep(
             activity_step_id=known_step_id,
             step_type="multipleChoice",
@@ -26,7 +26,7 @@ def test_solver_uses_verified_answers():
                 ExamOption(id="wrong_id", text="no"),
             ],
         )
-        
+
         answer = solver.solve_step(step)
         assert answer is not None
         assert answer.activity_step_id == known_step_id
@@ -47,7 +47,7 @@ def test_solver_heuristic_grammar():
             ExamOption(id="opt4", text="herself"),
         ],
     )
-    
+
     answer = solver.solve_step(step)
     assert answer is not None
     assert answer.activity_step_id == "unknown_step_999"
@@ -65,12 +65,12 @@ def test_solver_fallback_on_unknown_question(tmp_path):
             ExamOption(id="second_choice", text="Second choice"),
         ],
     )
-    
+
     answer = solver.solve_step(step)
     assert answer is not None
     assert answer.activity_step_id == "unknown_step_abc"
     assert answer.content_id in ["first_choice", "second_choice"]
-    
+
     # Verify diagnostic dump was created
     dump_file = tmp_path / "unverified_exam_questions.json"
     assert dump_file.exists()
@@ -87,7 +87,6 @@ def test_solver_strict_mode_stops_instead_of_guessing():
             ExamOption(id="second_choice", text="Second choice"),
         ],
     )
-    
+
     with pytest.raises(ExamAnswerUnavailable):
         solver.solve_step(step)
-

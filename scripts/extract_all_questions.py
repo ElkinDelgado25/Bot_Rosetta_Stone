@@ -12,10 +12,10 @@ for idx, e in enumerate(har["log"]["entries"]):
     if "gaia-server.rosettastone.com" in url and req["method"] == "POST":
         req_body = json.loads(req.get("postData", {}).get("text", "{}"))
         resp_body = json.loads(e["response"].get("content", {}).get("text", "{}"))
-        
+
         msg = req_body.get("variables", {}).get("message", {})
         step_data = resp_body.get("data", {}).get("assessmentStep", {})
-        
+
         exam_steps.append({
             "req_msg": msg,
             "resp_step": step_data
@@ -31,21 +31,21 @@ for i, step in enumerate(exam_steps):
     act = resp_step.get("activity")
     if not act:
         continue
-    
+
     act_id = act.get("activityId")
     act_type = act.get("activityType")
     prog = resp_step.get("progress") or {}
-    
+
     for s_idx, s in enumerate(act.get("steps", [])):
         step_id = s.get("activityStepId")
         step_type = s.get("type")
         content = s.get("content", [])
-        
+
         prompt = []
         passage = None
         audio = None
         options = []
-        
+
         if len(content) > 0:
             c0 = content[0]
             items = c0 if isinstance(c0, list) else [c0]
@@ -57,7 +57,7 @@ for i, step in enumerate(exam_steps):
                         passage = it["htmlText"]
                     if "audios" in it and it["audios"]:
                         audio = it["audios"][0].get("media_uri")
-                        
+
         if len(content) > 1:
             c1 = content[1]
             items = c1 if isinstance(c1, list) else [c1]
@@ -68,7 +68,7 @@ for i, step in enumerate(exam_steps):
                         "text": it.get("text"),
                         "audio": it.get("audios", [{}])[0].get("media_uri") if it.get("audios") else None
                     })
-                    
+
         # Find what the user submitted in the next request for this step_id
         submitted_answer = None
         if i + 1 < len(exam_steps):
@@ -76,7 +76,7 @@ for i, step in enumerate(exam_steps):
             for ans in next_req_msg.get("answers", []):
                 if ans.get("activityStepId") == step_id:
                     submitted_answer = ans.get("contentId")
-                    
+
         detailed_questions.append({
             "step_num": len(detailed_questions) + 1,
             "activity_id": act_id,

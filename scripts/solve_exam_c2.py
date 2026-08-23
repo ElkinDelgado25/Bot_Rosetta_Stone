@@ -17,7 +17,7 @@ with open(out_txt, "w", encoding="utf-8") as out:
             out.write(f"Passage: {q['passage']}\n")
         if q.get("audio"):
             out.write(f"Audio URI: {q['audio']}\n")
-            
+
         out.write("Options:\n")
         for opt in q["options"]:
             is_sub = " <--- [SUBMITTED IN HAR]" if opt["id"] == q["submitted_content_id"] else ""
