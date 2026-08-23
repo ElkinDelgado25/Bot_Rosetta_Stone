@@ -5,6 +5,7 @@ from rosseta_stone_script_a.domain.entities.exam import (
     ExamOption,
     ExamStep,
 )
+from rosseta_stone_script_a.domain.errors import ExamAnswerUnavailable
 
 
 def test_solver_uses_verified_answers():
@@ -53,8 +54,8 @@ def test_solver_heuristic_grammar():
     assert answer.content_id == "opt2"  # "hers"
 
 
-def test_solver_fallback_first_option():
-    solver = ExamSolver()
+def test_solver_fallback_on_unknown_question(tmp_path):
+    solver = ExamSolver(allow_fallback=True, diagnostics_dir=tmp_path)
     step = ExamStep(
         activity_step_id="unknown_step_abc",
         step_type="multipleChoice",
@@ -67,4 +68,26 @@ def test_solver_fallback_first_option():
     
     answer = solver.solve_step(step)
     assert answer is not None
-    assert answer.content_id == "first_choice"
+    assert answer.activity_step_id == "unknown_step_abc"
+    assert answer.content_id in ["first_choice", "second_choice"]
+    
+    # Verify diagnostic dump was created
+    dump_file = tmp_path / "unverified_exam_questions.json"
+    assert dump_file.exists()
+
+
+def test_solver_strict_mode_stops_instead_of_guessing():
+    solver = ExamSolver(allow_fallback=False)
+    step = ExamStep(
+        activity_step_id="unknown_step_strict",
+        step_type="multipleChoice",
+        prompt="Arbitrary unindexed prompt",
+        options=[
+            ExamOption(id="first_choice", text="First choice"),
+            ExamOption(id="second_choice", text="Second choice"),
+        ],
+    )
+    
+    with pytest.raises(ExamAnswerUnavailable):
+        solver.solve_step(step)
+
