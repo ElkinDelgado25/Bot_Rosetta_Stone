@@ -385,6 +385,9 @@ Builder u otros) también entra.
 
 Hacer los envios mas indetectables y que no se pueda detectar que es un bot, para esto se tendra que hacer un analisis de los envios y ver como se puede hacer mas indetectable.
 
-### Pendiente
+### Completado: Soporte de Examen (Screener / Placement Test)
 
-Realizar la parte de el examen de de rosseta el cual se te facilitara el examen de rosseta stone y el bot lo realizara de manera automatica y enviara los resultados al endpoint de tracking
+- Extracción y análisis completo de las 70 actividades del examen desde el HAR.
+- Mapeo de respuestas 100% correctas en [`exam_verified_answers.json`](file:///c:/Users/Usuario/Desktop/Personal/Roseta/src/rosseta_stone_script_a/infrastructure/adapters/exam_api/exam_verified_answers.json) para obtener calificación máxima (400 puntos / nivel C2).
+- Autodetección de producto: si el dashboard no ofrece Foundations ni Fluency Builder, o si detecta un examen/evaluación pendiente, inicia automáticamente el caso de uso `CompleteExamUseCase` vía `gaia-server.rosettastone.com/graphql`.
+- Delays humanos configurables por paso para evitar detección.
