@@ -9,7 +9,7 @@ attempt, which is enough when completion is gated on submission rather than scor
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from rosseta_stone_script_a.domain.entities.fluency_activity import FluencyActivity
 from rosseta_stone_script_a.domain.entities.fluency_sequence import FluencySequence
@@ -29,12 +29,26 @@ class FluencyProgressBuilder:
         self.user_agent = user_agent
 
     def build_activity_messages(
-        self, sequence: FluencySequence, activity: FluencyActivity
+        self,
+        sequence: FluencySequence,
+        activity: FluencyActivity,
+        next_duration_ms: Optional[Callable[[], int]] = None,
     ) -> List[Dict[str, Any]]:
-        """Build the list of step messages for a single activity."""
+        """Build the list of step messages for a single activity.
+
+        ``next_duration_ms``, if given, is called once per emitted step to get
+        a realistic ``durationMs`` (see ``FluencyDurationCalculator``);
+        otherwise every step falls back to the flat ``DEFAULT_STEP_DURATION_MS``.
+        """
         activity_attempt_id = str(uuid.uuid4())
         return [
-            self._build_step_message(sequence, activity, step, activity_attempt_id)
+            self._build_step_message(
+                sequence,
+                activity,
+                step,
+                activity_attempt_id,
+                duration_ms=next_duration_ms() if next_duration_ms else DEFAULT_STEP_DURATION_MS,
+            )
             for step in activity.steps
             if step.step_id
         ]
@@ -45,6 +59,7 @@ class FluencyProgressBuilder:
         activity: FluencyActivity,
         step: FluencyStep,
         activity_attempt_id: str,
+        duration_ms: int,
     ) -> Dict[str, Any]:
         answers, score = self._answers_for(step)
         return {
@@ -59,7 +74,7 @@ class FluencyProgressBuilder:
             "answers": answers,
             "score": score,
             "skip": False,
-            "durationMs": DEFAULT_STEP_DURATION_MS,
+            "durationMs": duration_ms,
             "endTimestamp": self._now_iso(),
         }
 

@@ -98,3 +98,18 @@ class TestFluencyProgressBuilder:
         m = FluencyProgressBuilder().build_activity_messages(seq, act)[0]
         assert m["endTimestamp"].endswith("Z")
         assert m["skip"] is False
+
+    def test_default_duration_is_flat_constant(self):
+        seq, act = _sequence([FluencyStep("s1", "card", [])])
+        m = FluencyProgressBuilder().build_activity_messages(seq, act)[0]
+        assert m["durationMs"] == 5000
+
+    def test_next_duration_ms_is_called_once_per_emitted_step(self):
+        seq, act = _sequence(
+            [FluencyStep("s1", "card", []), FluencyStep("s2", "card", [])]
+        )
+        durations = iter([1234, 5678])
+        msgs = FluencyProgressBuilder().build_activity_messages(
+            seq, act, next_duration_ms=lambda: next(durations)
+        )
+        assert [m["durationMs"] for m in msgs] == [1234, 5678]
