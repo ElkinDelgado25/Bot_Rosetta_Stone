@@ -192,7 +192,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
 
         choice = choices.first
         audio = await self._capture_choice_audio(choice)
-        await choice.click()
+        await choice.click(force=True, timeout=self.timeout_ms)
 
         await self.page.evaluate(
             "() => { window.__rosettaMicReady = false; "
@@ -239,7 +239,10 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             "window.__rosettaCaptureReference = true; }"
         )
         try:
-            await listen.click()
+            # The player places a decorative layer over the speaker icon. The
+            # target is a stable data-qa control, so dispatch the same click
+            # directly instead of waiting for that layer to stop intercepting.
+            await listen.click(force=True, timeout=self.timeout_ms)
             await self.page.wait_for_function(
                 "() => Boolean(window.__rosettaReferenceAudio || "
                 "window.__rosettaReferenceAudioUrl)",
