@@ -40,6 +40,23 @@ class FluencyApiPort(ABC):
         ...
 
     @abstractmethod
+    async def add_usage_overhead(
+        self,
+        authorization: str,
+        user_id: Optional[str],
+        messages: List[Dict[str, Any]],
+    ) -> FluencyProgressResult:
+        """Submit usage-time telemetry (AddUsageOverhead mutation).
+
+        **Inferred, unverified schema** — see docs/FLUENCY_BUILDER.md. The real
+        capture only recorded that this mutation exists and fires alongside
+        AddProgress; its exact fields were never captured. Best-effort only:
+        lesson completion is confirmed to work through ``add_progress`` alone,
+        so callers must treat failures here as non-fatal.
+        """
+        ...
+
+    @abstractmethod
     async def get_progress(
         self, authorization: str, course_id: str
     ) -> Dict[str, Any]:

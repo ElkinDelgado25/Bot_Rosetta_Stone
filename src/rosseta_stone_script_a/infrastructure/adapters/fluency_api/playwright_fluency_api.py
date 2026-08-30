@@ -68,6 +68,19 @@ mutation AddProgress($userId: String, $messages: [ProgressMessage!]!) {
 }
 """
 
+# Inferred by analogy to AddProgress — see FluencyApiPort.add_usage_overhead and
+# docs/FLUENCY_BUILDER.md. Field names are a best-effort guess, never captured
+# from real traffic; the gaia-server may reject this with a GraphQL schema
+# error, which the adapter treats as a normal (non-fatal) failure result.
+ADD_USAGE_OVERHEAD_MUTATION = """
+mutation AddUsageOverhead($userId: String, $overheads: [UsageOverheadMessage!]!) {
+  usageOverhead(userId: $userId, overheads: $overheads) {
+    id
+    __typename
+  }
+}
+"""
+
 GET_PROGRESS_QUERY = """
 query getProgress($courseId: String) {
   progress(courseId: $courseId) {
@@ -237,6 +250,79 @@ class PlaywrightFluencyApiAdapter(FluencyApiPort, LoggingMixin):
                 message_count=len(messages),
                 response_body=body,
                 rate_limited=rate_limited,
+            )
+
+        return FluencyProgressResult(
+            success=True,
+            status=response.status,
+            course_id=course_id,
+            sequence_id=sequence_id,
+            activity_id=activity_id,
+            message_count=len(messages),
+            response_body=body,
+        )
+
+    async def add_usage_overhead(
+        self,
+        authorization: str,
+        user_id,
+        messages,
+    ) -> FluencyProgressResult:
+        activity_id = messages[0].get("activityId", "") if messages else ""
+        course_id = messages[0].get("courseId", "") if messages else ""
+        sequence_id = messages[0].get("sequenceId", "") if messages else ""
+
+        payload = {
+            "operationName": "AddUsageOverhead",
+            "variables": {"userId": user_id, "overheads": messages},
+            "query": ADD_USAGE_OVERHEAD_MUTATION,
+        }
+        self.logger.info(
+            f"AddUsageOverhead activity={activity_id} messages={len(messages)}"
+        )
+        try:
+            response = await self.request_context.post(
+                GAIA_GRAPHQL_URL, headers=self._headers(authorization), data=payload
+            )
+        except Exception as exc:
+            self.logger.warning(f"AddUsageOverhead request error: {exc}")
+            return FluencyProgressResult(
+                success=False,
+                status=0,
+                course_id=course_id,
+                sequence_id=sequence_id,
+                activity_id=activity_id,
+                message_count=len(messages),
+                error=str(exc),
+            )
+
+        body = await response.text()
+        if not response.ok:
+            self.logger.warning(f"AddUsageOverhead failed: {response.status} - {body}")
+            return FluencyProgressResult(
+                success=False,
+                status=response.status,
+                course_id=course_id,
+                sequence_id=sequence_id,
+                activity_id=activity_id,
+                message_count=len(messages),
+                response_body=body,
+            )
+
+        data = await response.json()
+        if data.get("errors"):
+            # Inferred mutation: a schema error here just confirms the guessed
+            # shape is wrong, not that anything is broken. Log at info, not
+            # error, so it does not read as a failure of the real write path.
+            self.logger.info(f"AddUsageOverhead GraphQL errors: {data['errors']}")
+            return FluencyProgressResult(
+                success=False,
+                status=response.status,
+                course_id=course_id,
+                sequence_id=sequence_id,
+                activity_id=activity_id,
+                message_count=len(messages),
+                response_body=body,
             )
 
         return FluencyProgressResult(
