@@ -113,6 +113,7 @@ class InProcessBackend(LoggingMixin):
                 state_dir=self._state_dir,
                 headless=True,
                 verify_only=mode == "verify",
+                pending_only=mode == "pending",
             )
         )
         self._tasks[profile.id] = task

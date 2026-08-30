@@ -121,6 +121,16 @@ def test_verify_on_an_unknown_profile_is_404(client):
     assert client.post("/api/profiles/nope/verify", json={}).status_code == 404
 
 
+def test_pending_endpoint_launches_a_read_only_reconciliation(client):
+    created = _create(client)
+    response = client.post(f"/api/profiles/{created['id']}/pending", json={})
+
+    assert response.status_code == 200
+    run = response.json()["run"]
+    assert run["mode"] == "pending"
+    assert run["status"] in ("queued", "running")
+
+
 def test_a_new_profile_starts_unverified(client):
     created = _create(client)
     assert created["product"] is None

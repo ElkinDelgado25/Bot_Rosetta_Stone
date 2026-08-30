@@ -106,6 +106,7 @@ class RunRecord:
     paths_total: int | None = None
     # "run" sends progress; "verify" only logs in and reports what it found.
     mode: str = "run"
+    pending_report: dict[str, Any] | None = None
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -120,6 +121,7 @@ class RunRecord:
             "paths_failed": self.paths_failed,
             "paths_total": self.paths_total,
             "lessons": [lesson.as_dict() for lesson in self.lessons.values()],
+            "pending_report": self.pending_report,
         }
 
     def reset_for_new_run(self) -> None:
@@ -131,6 +133,7 @@ class RunRecord:
         self.paths_total = None
         self.error = None
         self.finished_at = None
+        self.pending_report = None
 
 
 class _RunLogHandler(logging.Handler):
@@ -306,6 +309,10 @@ class RunManager:
             return
 
         self._absorb_captured(profile, outcome.captured)
+        report = (outcome.captured or {}).get("pending_report")
+        if isinstance(report, dict):
+            with self._lock:
+                self._records[profile_id].pending_report = report
         self._finish(profile_id, RunStatus.SUCCESS, None)
 
     def _absorb_captured(self, profile: Profile, captured: dict[str, Any]) -> None:
