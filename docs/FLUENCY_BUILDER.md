@@ -235,6 +235,28 @@ Notas para la implementación futura:
 - La respuesta de la mutación devuelve la lista de `ProgressCourse` con sus ids;
   no hay que interpretarla, solo confirmar 200.
 
+### `AddUsageOverhead` (inferida, sin verificar)
+
+La captura solo registró que existen 59 llamadas `AddUsageOverhead` junto a las
+106 `AddProgress` de esa corrida — **nunca se capturó su query, variables ni
+respuesta reales**. La completación de la lección (0%→100%, confirmada en
+corrida real) funciona solo con `AddProgress`; `AddUsageOverhead` parece
+telemetría complementaria de tiempo de uso, no un requisito de completación.
+
+Implementación actual: `FluencyApiPort.add_usage_overhead` /
+`PlaywrightFluencyApiAdapter.add_usage_overhead` envían una mutación inferida
+por analogía con `AddProgress` (mismo patrón de `mutation X($userId: String,
+$campo: [Tipo!]!)`, con los campos de identidad que `ProgressMessage` ya usa
+más el `durationMs` total de la actividad). Es **best-effort**:
+
+- Apagada por default (`FLUENCY_SEND_USAGE_OVERHEAD=0`). Solo se activa a
+  propósito para probarla contra la cuenta real.
+- Un error de schema GraphQL (mutación/campo inexistente) se trata como
+  fallo no fatal: se loguea a nivel `debug` y no interrumpe ni revierte el
+  `AddProgress` ya exitoso de esa actividad.
+- Corregir el query/variables reales en cuanto exista una captura de red que
+  la muestre — hasta entonces, tratarla como no verificada.
+
 ## Mapeo a dominio (capa de lectura implementada)
 
 ```

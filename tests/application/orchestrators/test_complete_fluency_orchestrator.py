@@ -42,6 +42,7 @@ class _FakeApi:
         self._pending = pending_seqs
         self._complete_after = complete_after
         self.add_progress_calls = []
+        self.add_usage_overhead_calls = []
         self._catalog_reads = 0
 
     def _catalog(self, complete):
@@ -76,6 +77,13 @@ class _FakeApi:
 
     async def add_progress(self, authorization, user_id, messages):
         self.add_progress_calls.append(messages)
+        return FluencyProgressResult(
+            success=True, status=200, activity_id=messages[0]["activityId"],
+            message_count=len(messages),
+        )
+
+    async def add_usage_overhead(self, authorization, user_id, messages):
+        self.add_usage_overhead_calls.append(messages)
         return FluencyProgressResult(
             success=True, status=200, activity_id=messages[0]["activityId"],
             message_count=len(messages),
@@ -199,7 +207,41 @@ class _SpeechSpy:
         return self.succeeds
 
 
+class _RaisingUsageOverheadApi(_FakeApi):
+    """The inferred AddUsageOverhead mutation can fail (wrong schema guess)."""
+
+    async def add_usage_overhead(self, authorization, user_id, messages):
+        self.add_usage_overhead_calls.append(messages)
+        raise RuntimeError("gaia-server rejected the guessed schema")
+
+
 class TestCompleteFluencyOrchestrator:
+    def test_usage_overhead_disabled_by_default(self):
+        api = _FakeApi(["seq-a"])
+        orch = CompleteFluencyOrchestrator(api_port=api, max_lessons=1)
+        _run(orch)
+        assert api.add_usage_overhead_calls == []
+
+    def test_usage_overhead_sent_when_enabled(self):
+        api = _FakeApi(["seq-a"])
+        orch = CompleteFluencyOrchestrator(
+            api_port=api, max_lessons=1, send_usage_overhead=True
+        )
+        _run(orch)
+        assert len(api.add_usage_overhead_calls) == 1
+        assert api.add_usage_overhead_calls[0][0]["activityId"] == "a1"
+
+    def test_usage_overhead_failure_does_not_block_completion(self):
+        api = _RaisingUsageOverheadApi(["seq-a"])
+        orch = CompleteFluencyOrchestrator(
+            api_port=api, max_lessons=1, send_usage_overhead=True
+        )
+        _run(orch)
+        # The activity itself still landed via add_progress despite the
+        # inferred mutation raising.
+        assert len(api.add_progress_calls) == 1
+        assert len(api.add_usage_overhead_calls) == 1
+
     def test_respects_max_lessons(self):
         api = _FakeApi(["seq-a", "seq-b", "seq-c"])
         orch = CompleteFluencyOrchestrator(api_port=api, max_lessons=1)

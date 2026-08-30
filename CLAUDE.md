@@ -191,6 +191,7 @@ Van en `.env` o en `environment:` del compose.
 | `FLUENCY_MAX_LESSONS` | 1 (CLI) / all (web) | Lecciones por corrida |
 | `FLUENCY_DRY_RUN` | `false` | `true` para construir sin enviar |
 | `FLUENCY_TOTAL_COURSE_HOURS` | `70` | Horas de estudio fabricadas, repartidas entre lecciones/steps de la corrida |
+| `FLUENCY_SEND_USAGE_OVERHEAD` | `false` | `true` para probar la mutación `AddUsageOverhead` (inferida, sin verificar) |
 
 ---
 
@@ -356,8 +357,18 @@ uv run pytest -q -s [path/test_file.py]   # sin capturar print()
 ---
 ### siguientes pasos
 
-- realizar la implementacion de correccion de AddUsageOverhead, mas la implementacion de la clase de FluencyBuilderOrchestrator, y la implementacion de la clase de FluencyBuilderUseCase, para poder realizar el envio de las lecciones completadas al endpoint de tracking. de la parte de audio y poder completarla, 
--  Ajuste de las horas asi como se realizan en el foundaments con un total de maximo 70 horas en division de las lecciones que exista 
+- ~~AddUsageOverhead~~ — implementada como mutación **inferida y sin
+  verificar** (`FluencyApiPort.add_usage_overhead` /
+  `PlaywrightFluencyApiAdapter`), apagada por default
+  (`FLUENCY_SEND_USAGE_OVERHEAD=0`). El envío de lecciones completadas al
+  tracking (`AddProgress`) y la parte de audio (`CompleteFluencyOrchestrator`
+  + `PlaywrightFluencySpeechPage`) ya estaban implementados antes de esta
+  nota. **Pendiente real:** conseguir una captura de red con el query/
+  variables reales de `AddUsageOverhead` para reemplazar la versión inferida.
+- ~~Ajuste de las horas~~ — implementado (`FluencyDurationCalculator`):
+  presupuesto total de horas de estudio (`FLUENCY_TOTAL_COURSE_HOURS`,
+  default 70) repartido con jitter entre las lecciones y steps de la
+  corrida, reemplazando el `durationMs` fijo de 5000ms.
 ---
 
 ## Links Útiles

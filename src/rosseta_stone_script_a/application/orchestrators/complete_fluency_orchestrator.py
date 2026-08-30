@@ -43,6 +43,7 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         builder: Optional[FluencyProgressBuilder] = None,
         speech_port: Optional[FluencySpeechPort] = None,
         duration_calculator: Optional[FluencyDurationCalculator] = None,
+        send_usage_overhead: bool = False,
     ):
         super().__init__()
         self.api_port = api_port
@@ -55,6 +56,10 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         self.builder = builder or FluencyProgressBuilder()
         self.speech_port = speech_port
         self.duration_calculator = duration_calculator or FluencyDurationCalculator()
+        # AddUsageOverhead's schema was never captured from real traffic (see
+        # FluencyApiPort.add_usage_overhead); off by default so an unverified
+        # mutation never runs against a real account without opting in.
+        self.send_usage_overhead = send_usage_overhead
         self._state_dir = state_dir
         # Resolved in execute(), once the run knows whose account this is. A
         # single shared file would make user B skip the activities user A
@@ -246,6 +251,10 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
                 )
                 sent_attempts[activity.activity_id] = messages[0]["activityAttemptId"]
                 self._mark_done(key)
+                if self.send_usage_overhead:
+                    await self._send_usage_overhead(
+                        authorization, user_id, sequence, activity, messages
+                    )
             else:
                 self.logger.error(
                     f"  FAILED activity {activity_number}/{total_activities}: "
@@ -337,6 +346,32 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
                 f"{result.error or result.response_body[:200]}"
             )
         return result.success
+
+    async def _send_usage_overhead(
+        self, authorization, user_id, sequence, activity, messages
+    ) -> None:
+        """Best-effort AddUsageOverhead call for a just-completed activity.
+
+        Unverified/inferred mutation (FluencyApiPort.add_usage_overhead) — a
+        failure here (including a GraphQL schema error) is expected until it is
+        validated against real traffic, and must never affect the activity's
+        already-successful AddProgress result.
+        """
+        total_duration_ms = sum(m.get("durationMs", 0) for m in messages)
+        overhead_message = self.builder.build_usage_overhead_message(
+            sequence, activity, total_duration_ms
+        )
+        try:
+            result = await self.api_port.add_usage_overhead(
+                authorization, user_id, [overhead_message]
+            )
+            if not result.success:
+                self.logger.debug(
+                    "  AddUsageOverhead not accepted (unverified mutation): "
+                    f"status={result.status} {result.error or result.response_body[:200]}"
+                )
+        except Exception as exc:
+            self.logger.debug(f"  AddUsageOverhead call raised (ignored): {exc}")
 
     async def _send_with_retry(self, authorization, user_id, messages):
         """Send one activity, retrying with exponential backoff on rate limiting."""

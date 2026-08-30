@@ -160,6 +160,10 @@ class DependencyFactory:
             across however many lessons this run completes, mirroring the
             realistic per-path durations Foundations derives from its own
             time estimates (default 70, a full Rosetta Stone level).
+        FLUENCY_SEND_USAGE_OVERHEAD: "1"/"true" to also fire the inferred,
+            unverified AddUsageOverhead mutation after each completed
+            activity (default off — its schema was never captured from real
+            traffic; see FluencyApiPort.add_usage_overhead).
         """
         import os
 
@@ -184,6 +188,10 @@ class DependencyFactory:
         except ValueError:
             total_hours = 70.0
 
+        send_usage_overhead = os.getenv(
+            "FLUENCY_SEND_USAGE_OVERHEAD", ""
+        ).strip().lower() in ("1", "true", "yes")
+
         return CompleteFluencyOrchestrator(
             api_port=self._fluency_api_adapter(),
             speech_port=self._fluency_speech_adapter(),
@@ -194,6 +202,7 @@ class DependencyFactory:
             lesson_filter=os.getenv("FLUENCY_LESSON") or None,
             delay_ms=delay_ms,
             duration_calculator=FluencyDurationCalculator(total_course_hours=total_hours),
+            send_usage_overhead=send_usage_overhead,
         )
 
     def _fluency_speech_adapter(self) -> PlaywrightFluencySpeechPage | None:
