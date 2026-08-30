@@ -141,6 +141,12 @@
   .lessons td { padding: 3px 10px 3px 0; }
   .lessons td.ok { color: var(--ok); }
   .lessons td.bad { color: var(--err); }
+  .pending-report { margin-top: 14px; border: 1px solid var(--border);
+                    border-radius: 8px; padding: 10px 12px; }
+  .pending-report summary { cursor: pointer; font-weight: 600; }
+  .pending-report .summary { color: var(--muted); font-size: 12px; margin: 5px 0 9px; }
+  .pending-report ol { margin: 0; padding-left: 20px; max-height: 220px; overflow: auto; }
+  .pending-report li { font-size: 12px; padding: 2px 0; }
   details.session { margin-top: 12px; border: 1px solid var(--border);
                     border-radius: 8px; padding: 9px 12px; }
   details.session summary { cursor: pointer; font-size: 12px; color: var(--muted); }
@@ -256,11 +262,25 @@ function productLabel(product) {
 function statusLabel(profile) {
   const status = profile.run.status;
   const verifying = profile.run.mode === "verify";
+  const checking = profile.run.mode === "pending";
   if (status === "queued" && profile.queue_position)
     return `en cola #${profile.queue_position}`;
-  if (status === "running") return verifying ? "verificando" : "running";
+  if (status === "running") return verifying ? "verificando" : checking ? "consultando" : "running";
   if (status === "success" && verifying) return "verificado";
+  if (status === "success" && checking) return "actualizado";
   return status;
+}
+
+function renderPendingReport(report) {
+  if (!report) return "";
+  const items = (list) => list.map((item) => `<li><b>${escapeHtml(item.course)}</b> ·
+    ${escapeHtml(item.lesson)} · ${escapeHtml(item.activity_id)}</li>`).join("");
+  return `<div class="pending-report">
+    <b>Estado real de Fluency Builder</b>
+    <p class="summary">${report.completed.length} completas · ${report.pending.length} pendientes${report.recovered ? " · " + report.recovered + " agregadas a memoria" : ""}</p>
+    <details><summary>Ver completas (${report.completed.length})</summary><ol>${items(report.completed)}</ol></details>
+    <details><summary>Ver pendientes (${report.pending.length})</summary><ol>${items(report.pending)}</ol></details>
+  </div>`;
 }
 
 /* Lo que la verificación averiguó de la cuenta. */
@@ -420,6 +440,7 @@ function renderDetail() {
     </div>
     ${renderAccountFacts(profile)}
     <p class="hint">Última corrida: ${escapeHtml(lastRun)}${run.error ? " · Error: " + escapeHtml(run.error) : ""}</p>
+    ${renderPendingReport(run.pending_report)}
     ${renderLessons(run)}
     ${renderSession(profile.session)}
     ${profile.has_password ? "" : `
@@ -429,11 +450,12 @@ function renderDetail() {
     <div class="actions">
       <button class="primary" id="runBtn" ${busy ? "disabled" : ""}>Ejecutar</button>
       <button id="verifyBtn" ${busy ? "disabled" : ""}>Verificar</button>
+      <button id="pendingBtn" ${busy || !["fluency_builder", "foundations"].includes(profile.product) ? "disabled" : ""}>Pendiente</button>
       <button id="stopBtn" ${busy ? "" : "disabled"}>Detener</button>
       <button id="editBtn">Editar</button>
       <button class="danger" id="deleteBtn" ${busy ? "disabled" : ""}>Eliminar</button>
     </div>
-    <p class="hint">Verificar solo inicia sesión y detecta el producto: no envía nada.</p>`;
+    <p class="hint">Pendiente consulta el producto real, no envía respuestas y actualiza la memoria con lo que ya esté completado.</p>`;
 
   hardenMaskedFields(detail);
 
@@ -453,6 +475,7 @@ function renderDetail() {
 
   $("runBtn").addEventListener("click", () => launch("run"));
   $("verifyBtn").addEventListener("click", () => launch("verify"));
+  $("pendingBtn").addEventListener("click", () => launch("pending"));
 
   $("stopBtn").addEventListener("click", async () => {
     try { await api(`/api/profiles/${profile.id}/stop`, { method: "POST" }); showError(""); }
