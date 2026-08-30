@@ -36,6 +36,7 @@ class RosettaCLI(LoggingMixin):
         state_dir: Path | None = None,
         headless: bool | None = None,
         verify_only: bool = False,
+        pending_only: bool = False,
     ) -> dict:
         """
         Run a hierarchical learning session following Course → Lesson → Activity flow.
@@ -101,6 +102,22 @@ class RosettaCLI(LoggingMixin):
                         product,
                     )
                     return captured_data
+
+                if pending_only:
+                    if product == RosettaProduct.FLUENCY_BUILDER.value:
+                        checker = factory.create_fluency_pending_orchestrator()
+                        captured_data["pending_report"] = await checker.execute(captured_data)
+                        return captured_data
+                    if product == RosettaProduct.FOUNDATIONS.value:
+                        checker = factory.create_foundations_pending_orchestrator()
+                        captured_data["pending_report"] = await checker.execute(captured_data)
+                        return captured_data
+                    else:
+                        self.logger.info("Pendientes no está disponible para este producto.")
+                        captured_data["pending_report"] = {
+                            "completed": [], "pending": [], "recovered": 0
+                        }
+                        return captured_data
 
                 if product == RosettaProduct.FLUENCY_BUILDER.value:
                     self.logger.info("Account uses Fluency Builder; running write phase")

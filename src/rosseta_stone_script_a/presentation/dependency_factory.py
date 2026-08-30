@@ -10,6 +10,12 @@ from rosseta_stone_script_a.application.orchestrators.complete_foundations_orche
 from rosseta_stone_script_a.application.orchestrators.fluency_orchestrator import (
     FluencyOrchestrator,
 )
+from rosseta_stone_script_a.application.orchestrators.fluency_pending_orchestrator import (
+    FluencyPendingOrchestrator,
+)
+from rosseta_stone_script_a.application.orchestrators.foundations_pending_orchestrator import (
+    FoundationsPendingOrchestrator,
+)
 from rosseta_stone_script_a.application.orchestrators.open_fundations import (
     OpenFundations,
 )
@@ -124,6 +130,22 @@ class DependencyFactory:
     def create_fluency_orchestrator(self) -> FluencyOrchestrator:
         """Create the read-only Fluency Builder orchestrator with its API adapter."""
         return FluencyOrchestrator(api_port=self._fluency_api_adapter())
+
+    def create_fluency_pending_orchestrator(self) -> FluencyPendingOrchestrator:
+        """Create the read-only checker used by the web Pending button."""
+        return FluencyPendingOrchestrator(
+            api_port=self._fluency_api_adapter(), state_dir=self.state_dir
+        )
+
+    def create_foundations_pending_orchestrator(self) -> FoundationsPendingOrchestrator:
+        """Create the read-only Foundations checker used by the web UI."""
+        page = getattr(self.web_session, "_page", None)
+        if not page:
+            raise RuntimeError("Web session not initialized correctly")
+        return FoundationsPendingOrchestrator(
+            api_port=PlaywrightFoundationsApiAdapter(page.request),
+            state_dir=self.state_dir,
+        )
 
     def create_complete_fluency_orchestrator(self) -> CompleteFluencyOrchestrator:
         """Create the Fluency write orchestrator, bounded by env-var safety knobs.

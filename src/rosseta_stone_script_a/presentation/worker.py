@@ -74,6 +74,7 @@ async def _run(config: dict[str, Any]) -> dict[str, Any]:
         state_dir=Path(config["state_dir"]),
         headless=True,
         verify_only=config.get("mode") == "verify",
+        pending_only=config.get("mode") == "pending",
     )
 
 
