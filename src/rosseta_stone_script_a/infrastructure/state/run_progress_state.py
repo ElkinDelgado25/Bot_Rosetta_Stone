@@ -76,6 +76,18 @@ class RunProgressState:
         # No entry for today yet
         run_log.append({"date": today, "count": 1})
 
+    def remember_done(self, path_key: str) -> bool:
+        """Record an activity discovered as complete without counting a send.
+
+        A read-only reconciliation can find work that the learner completed in
+        Rosetta itself.  It belongs in the local resume cache, but it must not
+        inflate today's count because this application did not submit it.
+        """
+        if path_key in self._data["completed_path_keys"]:
+            return False
+        self._data["completed_path_keys"].append(path_key)
+        return True
+
     # ------------------------------------------------------------------
     # Day-cap helper
     # ------------------------------------------------------------------
