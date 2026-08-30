@@ -170,8 +170,8 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
                     seq_ref=seq_ref,
                     activity=activity,
                 )
-                if success and self._state:
-                    self._state.mark_done(key)
+                if success:
+                    self._mark_done(key)
                 events.emit(
                     "path_done",
                     ok=success,
@@ -209,8 +209,7 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
                     f"({len(messages)} steps)"
                 )
                 sent_attempts[activity.activity_id] = messages[0]["activityAttemptId"]
-                if self._state:
-                    self._state.mark_done(key)
+                self._mark_done(key)
             else:
                 self.logger.error(
                     f"  FAILED activity {activity_number}/{total_activities}: "
@@ -234,6 +233,17 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
                 await asyncio.sleep(self.delay_ms / 1000)
 
         return sent_attempts
+
+    def _mark_done(self, key: str) -> None:
+        """Persist each accepted activity immediately.
+
+        A web run can be cancelled while it is processing a long course. Saving
+        only at the end would lose every successful activity from that partial
+        run and make the next run send them again.
+        """
+        if self._state:
+            self._state.mark_done(key)
+            self._state.save()
 
     async def _complete_speech_activity(
         self, *, authorization, course, seq_ref, activity

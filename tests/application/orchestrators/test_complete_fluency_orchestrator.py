@@ -127,6 +127,15 @@ class _RateLimitedApi(_FakeApi):
         return await super().add_progress(authorization, user_id, messages)
 
 
+class _InterruptAfterFirstSuccessApi(_FakeApi):
+    """Simulates a cancelled/failed run after its first accepted activity."""
+
+    async def add_progress(self, authorization, user_id, messages):
+        if self.add_progress_calls:
+            raise RuntimeError("run interrupted")
+        return await super().add_progress(authorization, user_id, messages)
+
+
 class _SpeechApi(_FakeApi):
     def __init__(self, complete_after=True):
         super().__init__(["seq-a"])
@@ -274,6 +283,20 @@ class TestCompleteFluencyOrchestrator:
             api_port=api, state_dir=tmp_path, max_lessons=None
         )
         _run(orch)
+        from rosseta_stone_script_a.infrastructure.state import RunProgressState
+
+        reloaded = RunProgressState(tmp_path / "fluency_u1.json")
+        assert reloaded.is_done(fluency_activity_key("c1", "seq-a", "a1"))
+
+    def test_persists_successes_before_a_later_run_interruption(self, tmp_path):
+        api = _InterruptAfterFirstSuccessApi(["seq-a", "seq-b"])
+        orch = CompleteFluencyOrchestrator(
+            api_port=api, state_dir=tmp_path, max_lessons=None
+        )
+
+        with pytest.raises(RuntimeError, match="run interrupted"):
+            _run(orch)
+
         from rosseta_stone_script_a.infrastructure.state import RunProgressState
 
         reloaded = RunProgressState(tmp_path / "fluency_u1.json")
