@@ -190,6 +190,7 @@ Van en `.env` o en `environment:` del compose.
 | `LOG_LEVEL` | `INFO` | `DEBUG` para diagnosticar |
 | `FLUENCY_MAX_LESSONS` | 1 (CLI) / all (web) | Lecciones por corrida |
 | `FLUENCY_DRY_RUN` | `false` | `true` para construir sin enviar |
+| `FLUENCY_TOTAL_COURSE_HOURS` | `70` | Horas de estudio fabricadas, repartidas entre lecciones/steps de la corrida |
 
 ---
 

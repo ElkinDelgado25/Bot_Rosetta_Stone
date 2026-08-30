@@ -12,7 +12,11 @@ from typing import Any, Dict, Optional
 from rosseta_stone_script_a.application.ports.fluency_api import FluencyApiPort
 from rosseta_stone_script_a.application.ports.fluency_speech import FluencySpeechPort
 from rosseta_stone_script_a.application.ports.orchestrator import OrchestratorPort
+from rosseta_stone_script_a.application.services.fluency_duration_calculator import (
+    FluencyDurationCalculator,
+)
 from rosseta_stone_script_a.application.services.fluency_progress_builder import (
+    DEFAULT_STEP_DURATION_MS,
     FluencyProgressBuilder,
 )
 from rosseta_stone_script_a.domain.entities.fluency_catalog import FluencyCatalog
@@ -38,6 +42,7 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         max_retries: int = 5,
         builder: Optional[FluencyProgressBuilder] = None,
         speech_port: Optional[FluencySpeechPort] = None,
+        duration_calculator: Optional[FluencyDurationCalculator] = None,
     ):
         super().__init__()
         self.api_port = api_port
@@ -49,12 +54,17 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         self.max_retries = max(0, max_retries)
         self.builder = builder or FluencyProgressBuilder()
         self.speech_port = speech_port
+        self.duration_calculator = duration_calculator or FluencyDurationCalculator()
         self._state_dir = state_dir
         # Resolved in execute(), once the run knows whose account this is. A
         # single shared file would make user B skip the activities user A
         # completed: the keys are course|sequence|activity, with no account in
         # them, so one user's progress reads as everyone's.
         self._state: RunProgressState | None = None
+        # How many lessons this run will process, set in execute() once
+        # filters/max_lessons are applied — the divisor for the per-lesson
+        # share of the total study-time budget.
+        self._pending_lesson_count = 0
 
     async def execute(self, captured_data: Dict[str, Any]) -> None:
         authorization = captured_data.get("authorization") or ""
@@ -87,6 +97,8 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
 
         if self.max_lessons is not None:
             pending = pending[: self.max_lessons]
+
+        self._pending_lesson_count = len(pending)
 
         touched = []
         for course, seq_ref in pending:
@@ -143,6 +155,28 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
             ordered_activities.append(activity)
 
         total_activities = len(ordered_activities)
+
+        # Speech activities are timed by the browser itself; only budget the
+        # activities this method fabricates messages for.
+        fabricated_step_count = sum(
+            1
+            for a in ordered_activities
+            if a.activity_type != "DialogueExpressionWithReco"
+            for s in a.steps
+            if s.step_id
+        )
+        lesson_budget_ms = self.duration_calculator.lesson_budget_ms(
+            self._pending_lesson_count
+        )
+        step_durations = iter(
+            self.duration_calculator.step_durations_ms(
+                lesson_budget_ms, fabricated_step_count
+            )
+        )
+
+        def _next_duration_ms() -> int:
+            return next(step_durations, DEFAULT_STEP_DURATION_MS)
+
         for activity_number, activity in enumerate(ordered_activities, start=1):
             activity_label = (
                 f"{course.title} / {seq_ref.title} / {activity.activity_type}"
@@ -183,7 +217,9 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
                 )
                 continue
 
-            messages = self.builder.build_activity_messages(sequence, activity)
+            messages = self.builder.build_activity_messages(
+                sequence, activity, next_duration_ms=_next_duration_ms
+            )
             if not messages:
                 self.logger.warning(
                     f"  Skipping activity {activity_number}/{total_activities}: "

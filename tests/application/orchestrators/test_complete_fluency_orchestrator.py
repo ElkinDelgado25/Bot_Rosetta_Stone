@@ -8,6 +8,9 @@ from rosseta_stone_script_a.application.orchestrators.complete_fluency_orchestra
     CompleteFluencyOrchestrator,
     fluency_activity_key,
 )
+from rosseta_stone_script_a.application.services.fluency_duration_calculator import (
+    FluencyDurationCalculator,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -209,6 +212,20 @@ class TestCompleteFluencyOrchestrator:
         orch = CompleteFluencyOrchestrator(api_port=api, max_lessons=None)
         _run(orch)
         assert len(api.add_progress_calls) == 3
+
+    def test_duration_ms_is_budgeted_instead_of_flat_default(self):
+        api = _FakeApi(["seq-a"])
+        # One lesson, one step -> the whole budget lands on that single step.
+        calc = FluencyDurationCalculator(total_course_hours=1.0)
+        orch = CompleteFluencyOrchestrator(
+            api_port=api, max_lessons=1, duration_calculator=calc
+        )
+        _run(orch)
+        duration_ms = api.add_progress_calls[0][0]["durationMs"]
+        expected = calc.total_course_ms
+        # Two rounds of +/-33% jitter (per-lesson, then per-step) compound, so
+        # allow the wider combined range rather than a single +/-33% band.
+        assert expected * 4 // 9 <= duration_ms <= expected * 16 // 9
 
     def test_lesson_filter_targets_named_lesson(self):
         api = _FakeApi(["seq-a", "seq-b", "seq-c"])

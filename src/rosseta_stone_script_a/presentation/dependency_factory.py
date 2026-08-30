@@ -21,6 +21,9 @@ from rosseta_stone_script_a.application.orchestrators.open_fundations import (
 )
 from rosseta_stone_script_a.application.ports.web import IWebSession
 from rosseta_stone_script_a.application.services.exam_solver import ExamSolver
+from rosseta_stone_script_a.application.services.fluency_duration_calculator import (
+    FluencyDurationCalculator,
+)
 from rosseta_stone_script_a.application.services.fluency_session_capturer import (
     FluencySessionCapturer,
 )
@@ -153,6 +156,10 @@ class DependencyFactory:
         FLUENCY_MAX_LESSONS: how many pending lessons to complete this run
             (default 1 for a controlled first run; set to 0 or "all" for no limit).
         FLUENCY_DRY_RUN: "1"/"true" to build and log messages without sending.
+        FLUENCY_TOTAL_COURSE_HOURS: total study-time budget (hours) fabricated
+            across however many lessons this run completes, mirroring the
+            realistic per-path durations Foundations derives from its own
+            time estimates (default 70, a full Rosetta Stone level).
         """
         import os
 
@@ -172,6 +179,11 @@ class DependencyFactory:
         except ValueError:
             delay_ms = 500
 
+        try:
+            total_hours = float(os.getenv("FLUENCY_TOTAL_COURSE_HOURS", "70"))
+        except ValueError:
+            total_hours = 70.0
+
         return CompleteFluencyOrchestrator(
             api_port=self._fluency_api_adapter(),
             speech_port=self._fluency_speech_adapter(),
@@ -181,6 +193,7 @@ class DependencyFactory:
             course_filter=os.getenv("FLUENCY_COURSE") or None,
             lesson_filter=os.getenv("FLUENCY_LESSON") or None,
             delay_ms=delay_ms,
+            duration_calculator=FluencyDurationCalculator(total_course_hours=total_hours),
         )
 
     def _fluency_speech_adapter(self) -> PlaywrightFluencySpeechPage | None:
