@@ -113,3 +113,12 @@ class TestFluencyProgressBuilder:
             seq, act, next_duration_ms=lambda: next(durations)
         )
         assert [m["durationMs"] for m in msgs] == [1234, 5678]
+
+    def test_usage_overhead_message_carries_identity_and_total_duration(self):
+        seq, act = _sequence([FluencyStep("s1", "card", [])])
+        m = FluencyProgressBuilder().build_usage_overhead_message(seq, act, 9000)
+        assert m["courseId"] == "course-1"
+        assert m["sequenceId"] == "seq-1"
+        assert m["activityId"] == "act-1"
+        assert m["durationMs"] == 9000
+        assert m["endTimestamp"].endswith("Z")

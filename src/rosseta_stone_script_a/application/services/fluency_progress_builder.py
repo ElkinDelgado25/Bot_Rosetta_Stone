@@ -78,6 +78,27 @@ class FluencyProgressBuilder:
             "endTimestamp": self._now_iso(),
         }
 
+    def build_usage_overhead_message(
+        self,
+        sequence: FluencySequence,
+        activity: FluencyActivity,
+        duration_ms: int,
+    ) -> Dict[str, Any]:
+        """Build one inferred UsageOverheadMessage for a completed activity.
+
+        Unverified schema (see FluencyApiPort.add_usage_overhead) — carries only
+        the identity fields ProgressMessage itself uses plus the activity's
+        total duration, since usage-time telemetry has no answer to report.
+        """
+        return {
+            "userAgent": self.user_agent,
+            "courseId": sequence.course_id,
+            "sequenceId": sequence.sequence_id,
+            "activityId": activity.activity_id,
+            "durationMs": duration_ms,
+            "endTimestamp": self._now_iso(),
+        }
+
     def _answers_for(self, step: FluencyStep):
         """Return (answers, score) fabricated for a step, keyed by its type.
 
