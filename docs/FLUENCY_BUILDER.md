@@ -171,12 +171,17 @@ Knobs de seguridad (variables de entorno):
 - `FLUENCY_DRY_RUN` — `1`/`true` para construir y loguear los mensajes **sin
   enviarlos**.
 - `FLUENCY_TOTAL_COURSE_HOURS` — presupuesto total de horas de estudio
-  fabricadas (default `70`, un nivel completo de Rosetta Stone), repartido con
-  jitter entre las lecciones de la corrida y, dentro de cada una, entre sus
-  steps. Reemplaza el `durationMs` fijo de 5000ms por algo que se parece a
-  Foundations, cuyo `PathCalculator` deriva la duración de un `time_estimate`
-  real por path. Fluency no trae ese dato en su árbol de contenido, así que
-  `FluencyDurationCalculator` fabrica el presupuesto en vez de leerlo.
+  fabricadas por curso (default `70`, un nivel completo de Rosetta Stone),
+  repartido con jitter entre **todas las lecciones que tiene el curso**
+  (`course.sequences`, no solo las que esta corrida procesa) y, dentro de
+  cada lección, entre sus steps. Divide por el total del curso a propósito:
+  una corrida con `FLUENCY_MAX_LESSONS=1` solo toca una lección, y dividir el
+  presupuesto por "1" en vez de por el tamaño real del curso inflaría cada
+  step a decenas de minutos. Reemplaza el `durationMs` fijo de 5000ms por
+  algo que se parece a Foundations, cuyo `PathCalculator` deriva la duración
+  de un `time_estimate` real por path. Fluency no trae ese dato en su árbol
+  de contenido, así que `FluencyDurationCalculator` fabrica el presupuesto en
+  vez de leerlo.
 
 > **Ojo con el default de 1.** Desde la terminal es deliberado, pero desde la UI
 > web se lee como un fallo: completa una lección y termina con éxito dejando el

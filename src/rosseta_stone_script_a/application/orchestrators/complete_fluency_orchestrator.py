@@ -66,10 +66,6 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         # completed: the keys are course|sequence|activity, with no account in
         # them, so one user's progress reads as everyone's.
         self._state: RunProgressState | None = None
-        # How many lessons this run will process, set in execute() once
-        # filters/max_lessons are applied — the divisor for the per-lesson
-        # share of the total study-time budget.
-        self._pending_lesson_count = 0
 
     async def execute(self, captured_data: Dict[str, Any]) -> None:
         authorization = captured_data.get("authorization") or ""
@@ -102,8 +98,6 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
 
         if self.max_lessons is not None:
             pending = pending[: self.max_lessons]
-
-        self._pending_lesson_count = len(pending)
 
         touched = []
         for course, seq_ref in pending:
@@ -170,8 +164,12 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
             for s in a.steps
             if s.step_id
         )
+        # Divide by how many lessons the COURSE has (assigned, not just
+        # pending) — a run's own batch is often just 1-5 lessons (see
+        # FLUENCY_MAX_LESSONS), and budgeting against that instead of the
+        # course's real size would inflate each step to tens of minutes.
         lesson_budget_ms = self.duration_calculator.lesson_budget_ms(
-            self._pending_lesson_count
+            len(course.sequences)
         )
         step_durations = iter(
             self.duration_calculator.step_durations_ms(

@@ -120,6 +120,25 @@ def _run(orch):
     return asyncio.run(orch.execute({"authorization": "Bearer x", "user_id": "u1"}))
 
 
+class _ManyLessonsCourseApi(_FakeApi):
+    """A course with several already-done lessons plus the pending ones."""
+
+    async def get_catalog(self, authorization, locale=None):
+        self._catalog_reads += 1
+        complete = self._catalog_reads > 1 and self._complete_after
+        done = [
+            FluencySequenceRef(f"done-{n}", f"Lesson done-{n}", percent_complete=1.0)
+            for n in range(1, 10)
+        ]
+        pending = [
+            FluencySequenceRef(sid, f"Lesson {sid}", percent_complete=1.0 if complete else 0.0)
+            for sid in self._pending
+        ]
+        return FluencyCatalog(
+            courses=[FluencyCourse("c1", "p", "Course", "B1", "Topic", done + pending)]
+        )
+
+
 class _RateLimitedApi(_FakeApi):
     """Fails with rate_limited for the first `fail_times` calls, then succeeds."""
 
@@ -267,6 +286,22 @@ class TestCompleteFluencyOrchestrator:
         expected = calc.total_course_ms
         # Two rounds of +/-33% jitter (per-lesson, then per-step) compound, so
         # allow the wider combined range rather than a single +/-33% band.
+        assert expected * 4 // 9 <= duration_ms <= expected * 16 // 9
+
+    def test_duration_budget_divides_by_course_total_lessons_not_run_batch(self):
+        # A course with 10 total lessons (9 already done, 1 pending). A run
+        # that only processes that 1 pending lesson must still divide the
+        # budget by the course's 10 lessons, not by "1 lesson this run" --
+        # dividing by the run's own tiny batch inflates each step to tens of
+        # minutes of fabricated study time.
+        api = _ManyLessonsCourseApi(["seq-a"])
+        calc = FluencyDurationCalculator(total_course_hours=1.0)
+        orch = CompleteFluencyOrchestrator(
+            api_port=api, max_lessons=None, duration_calculator=calc
+        )
+        _run(orch)
+        duration_ms = api.add_progress_calls[0][0]["durationMs"]
+        expected = calc.total_course_ms // 10
         assert expected * 4 // 9 <= duration_ms <= expected * 16 // 9
 
     def test_lesson_filter_targets_named_lesson(self):
