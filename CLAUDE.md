@@ -29,7 +29,7 @@ Instrucciones y contexto para trabajar en este repositorio. Léeme primero.
 - **FastAPI** — servidor web (opcional, solo si usas interfaz web)
 - **Playwright** — automatización del navegador (Chromium/Chrome/Edge)
 - **Docker** — aislamiento de corridas (opcional, recomendado para la web)
-- **pytest** — tests (119 tests)
+- **pytest** — tests (292 tests)
 
 ---
 
@@ -63,7 +63,7 @@ uv run python -m rosseta_stone_script_a
 
 Lee del `.env`. Primera ejecución lo crea interactivamente.
 
-### Tests — 119 tests, sin navegador ni contenedores
+### Tests — 292 tests, sin navegador ni contenedores
 
 ```bash
 uv run pytest -q
@@ -118,7 +118,7 @@ docs/
 ├── ARCHITECTURE.md       Modularización y capas
 └── FLUENCY_BUILDER.md    Detalles del producto Fluency
 
-tests/                    119 tests, por capas
+tests/                    292 tests, por capas
 ```
 
 ---
@@ -192,6 +192,14 @@ Van en `.env` o en `environment:` del compose.
 | `FLUENCY_DRY_RUN` | `false` | `true` para construir sin enviar |
 | `FLUENCY_TOTAL_COURSE_HOURS` | `70` | Horas de estudio fabricadas, repartidas entre lecciones/steps de la corrida |
 | `FLUENCY_SEND_USAGE_OVERHEAD` | `false` | `true` para probar la mutación `AddUsageOverhead` (inferida, sin verificar) |
+| `FLUENCY_SPEECH_BROWSER` | `1` | `0` apaga la ruta de voz por navegador |
+| `FLUENCY_SPEECH_TRACE` | `0` | `1` graba una traza de Playwright por actividad de voz fallida |
+| `FLUENCY_BROWSER_EXTRA_TYPES` | vacío | Tipos extra a completar por navegador, separados por coma |
+| `STORIES_TARGET_HOURS` | `1` | Horas a acreditar por corrida de Stories |
+| `STORIES_CHUNK_MIN_SEC` | `300` | Tramo mínimo por envío de uso |
+| `STORIES_CHUNK_MAX_SEC` | `900` | Tramo máximo por envío de uso |
+| `STORIES_REPORT_DELAY_SEC` | `0` | Espera entre envíos; `0` los manda seguidos |
+| `STORIES_LANGUAGE` | `ENG` | Idioma que se declara a la API de Stories |
 
 ---
 
@@ -217,6 +225,44 @@ GraphQL numera unidades globalmente (0-19 entre 5 niveles), pero tracking espera
 ### Fluency: 1 lección por defecto
 
 `FLUENCY_MAX_LESSONS=1` en la CLI (conservador, para pruebas). Desde la UI se traduce a `"all"` (el perfil puede limitarlo). El default no se toca: CLI sigue siendo cautelosa.
+
+### Stories acredita horas por otra API distinta
+
+Foundations y Fluency envían *contenido completado*; Stories envía **tiempo**.
+Son dos POST a `lcp.rosettastone.com/api/v3/app_usage`: `report_usage` abre la
+sesión de uso y `report_additional_usage` le suma segundos. Auth **por
+cookies**, no por Bearer — por eso el adaptador emite desde el contexto de
+peticiones del navegador y no recibe credenciales.
+
+Dos detalles que no se ven en el código si no se cuentan:
+
+- **Hay que entrar en una historia con el navegador.** No es decorado: ese paso
+  deja la sesión válida del lado del servidor a la que se le suman los
+  segundos. Sin él los POST no tienen a qué colgarse.
+- **Se reporta en tramos, no de golpe.** El reproductor real no manda un
+  resumen al final; va reportando según avanza. `StoriesUsagePlanner` corta el
+  presupuesto en trozos de 5-15 min, y `started_ago` vale el primer trozo para
+  que la sesión no nazca en el instante exacto de la primera llamada.
+
+Si el propio reproductor ya abrió su sesión de uso, se reutiliza su
+`session_identifier` (`StoriesSessionCapturer`) en vez de abrir una segunda en
+paralelo para la misma historia.
+
+En la portada, **"Continuar" aparece dos veces**: el texto de Dynamic
+Immersion® y el botón. Un locator con dos coincidencias hace saltar el modo
+estricto de Playwright, así que los empujones se pulsan con `click_first`, no
+con `click`. `exists()` no avisa del choque porque ya mira solo la primera.
+
+### El GUID del panel no es el `user_id` del tracking
+
+El panel del aprendiz (`prism.rosettastone.com/reports/learner/dashboard/<guid>`)
+pide un **GUID** y un Bearer del servicio de login. No sirve ninguno de los dos
+valores que ya capturábamos: el `user_id` del tracking es numérico y el
+`authorization` es el JWT de gaia. Los dos correctos viajan en el *cuerpo* de la
+respuesta del login (`auth_data.access_token` / `auth_data.userId`), por eso
+`LearnerAuthCapturer` escucha respuestas y no peticiones como los otros dos
+capturadores. Es la única lectura que confirma que lo enviado quedó registrado:
+el tracking responde 200 pase lo que pase.
 
 ### Estado de Fluency: por usuario, no global
 
@@ -314,7 +360,7 @@ Un JSON tocado a mano en Windows lleva BOM. `json.load` revienta. Se lee con `en
 uv run pytest -q
 ```
 
-119 tests. Ninguno abre navegador ni lanza contenedores:
+292 tests. Ninguno abre navegador ni lanza contenedores:
 - `FakeBackend` inyectado en tests de web
 - Tests de adapters mockean APIs
 - Todo se ejecuta en ~5 segundos
@@ -357,6 +403,20 @@ uv run pytest -q -s [path/test_file.py]   # sin capturar print()
 ---
 ### siguientes pasos
 
+- **Stories (horas de uso)** — implementado (`StoriesOrchestrator`,
+  `StoriesApiPort` / `PlaywrightStoriesApiAdapter`, `StoriesUsagePlanner`,
+  `StoriesPage`), disponible como modo `stories` en la CLI, el worker y la UI
+  (botón "Reportar horas"). **Pendiente real:** confirmar contra una cuenta
+  viva que los dos endpoints siguen aceptando los envíos y que las horas
+  aparecen en el panel. Del navegador ya hay confirmación parcial: una cuenta
+  Foundations llega a la portada de Stories; una Fluency no ve el listado.
+- **Verificación de horas** — implementada (`LearnerDashboardPort` /
+  `PlaywrightLearnerDashboardAdapter` + `LearnerAuthCapturer`): tras el login
+  se leen las horas que la plataforma reconoce y se guardan en la sesión
+  (`hours_total`, `hours_elearning`), visibles en la UI. De mejor esfuerzo:
+  si no hay credenciales o el panel falla, la corrida sigue igual.
+  **Confirmado en una cuenta real** (31-08-2026): la respuesta del login trae
+  `auth_data`, el capturador lo pesca y el panel devolvió 77,313 h.
 - ~~AddUsageOverhead~~ — implementada como mutación **inferida y sin
   verificar** (`FluencyApiPort.add_usage_overhead` /
   `PlaywrightFluencyApiAdapter`), apagada por default

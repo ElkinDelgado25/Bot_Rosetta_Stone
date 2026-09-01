@@ -303,12 +303,101 @@ micrófono virtual dentro de la página y deja que el reproductor genere el resu
 Solo persiste la actividad cuando `getProgress` confirma `percentComplete=1`. Puede
 desactivarse con `FLUENCY_SPEECH_BROWSER=0`.
 
+## Medido sobre corridas reales (31-08-2026)
+
+Cruzando los volcados de `getProgress` con los de `getSequence` (78.700 registros
+de actividad), quedan **49 actividades distintas** por debajo del 100%:
+
+| `activityType` | Nº | `percentComplete` |
+|---|---|---|
+| `DialogueExpressionWithReco` | 27 | 0 |
+| `DialogueExpressionWithoutReco` | 17 | 0 |
+| `PronunciationPhoneme` | 1 | 0 |
+| `Vocabulary` / `KeyVocabulary` | 4 | 0,056 · 0,059 · 0,091 — **lectura transitoria**, ver abajo |
+
+Dos hallazgos que cambiaron el código:
+
+1. Se probó a enrutar también `DialogueExpressionWithoutReco` al navegador y
+   **salió mal**: "WithoutReco" significa sin reconocimiento de voz, o sea que la
+   actividad no tiene botón de micrófono; la espera agotaba 90 s por actividad y
+   fallaba igual. `BROWSER_COMPLETED_TYPES` vuelve a llevar solo
+   `DialogueExpressionWithReco`. Esos 17 siguen siendo un hueco abierto: por API
+   no se completan y por la ruta de voz tampoco, porque no hay voz que dar.
+   Para probar otro tipo sin tocar código: `FLUENCY_BROWSER_EXTRA_TYPES=Tipo1,Tipo2`.
+2. Las tarjetas de vocabulario **no están rotas**. Los 1/18, 1/17 y 1/11 son
+   fotos tomadas *durante* la escritura: mirando la línea de tiempo de esas 4
+   actividades (`8dc8f563`, `c368ff9e`, `5bc0a3fc`, `9eff7a94`) cada una sube a
+   1,0 en el mismo minuto. Un escaneo que se quede con el mínimo histórico las
+   da por estancadas y no lo están. Con `answers=[]` se completan.
+
+## La conversación por navegador, paso a paso (01-09-2026)
+
+20 corridas reales sobre una cuenta B1 hasta dar con el bloqueo de verdad.
+Resumen de lo aprendido, por si alguien vuelve a pelearse con esto:
+
+**El bloqueo real: un modal de "Comprobación de micrófono".** Se pinta *encima*
+de la actividad al entrar en un paso de conversación, con un desplegable de
+dispositivos y un botón *Comenzar*. Detrás de esa capa ningún clic llega a las
+respuestas y el micrófono sigue `disabled`. Durante once corridas pareció un
+problema de selectores; lo destapó mirar un fotograma de la traza, no el DOM.
+
+Lo que hace falta para pasarlo:
+
+1. `--use-fake-device-for-media-stream` al lanzar Chromium, o el desplegable
+   sale vacío (un contenedor no tiene micrófonos) — más un parche de
+   `enumerateDevices` por si acaso.
+2. Un vigilante (`MutationObserver`) que pulse *Comenzar* y *Volver a intentar*
+   en cuanto aparezcan: el modal **no está** cuando se abre la actividad, sale
+   un momento después (en la traza aparece en 1 de 110 instantáneas).
+3. **Señal audible durante la comprobación.** La prueba pide decir "1, 2, 3, 4,
+   5" y escucha: un micrófono virtual sin nada inyectado es silencio y responde
+   *"No se detectó su entrada de audio"*. Se reproduce en bucle
+   `<ROSETTA_HOME>/audio/mic_check.wav` si existe (una voz real), y si no un
+   tono de 220 Hz.
+4. *Comenzar* no es un `<button>`: es un `div`/`span` con `data-qa`. Buscarlo
+   por rol devuelve cero y el modal se queda abierto en silencio.
+
+**El audio de referencia se saca del buffer que suena, no de la URL.** La media
+va firmada (500 al descargarla, incluso desde dentro de la página) y se descifra
+en un worker donde los ganchos del hilo principal no llegan. Lo que sí funciona:
+enganchar `AudioBufferSourceNode.start` y serializar `getChannelData` a WAV.
+
+**Lo que se probó y NO funciona** (para no repetirlo):
+
+- Reproducir el audio del enunciado antes de responder: deja el reproductor
+  ocupado y los altavoces de las respuestas dejan de sonar.
+- Enrutar `DialogueExpressionWithoutReco` a la ruta de voz: no tiene micrófono.
+- Esperar a que el micrófono se habilite como prueba de que se eligió respuesta:
+  son dos cosas distintas.
+
+## Fallos del flujo de voz corregidos (31-08-2026)
+
+Tres, sacados de los errores de una corrida real:
+
+- **El botón de micrófono llega deshabilitado.** El reproductor lo marca
+  `disabled` mientras suena el audio del diálogo y pinta encima una capa que se
+  traga el clic (`<div class="css-onwehy"> intercepts pointer events`).
+  Playwright reintentaba 60 veces y moría a los 30 s. Ahora se espera a que el
+  botón no tenga `disabled` y se pulsa con `force`, que salta la comprobación de
+  interceptación.
+- **Títulos de lección repetidos.** `Registration` existe en más de un curso, y
+  el código exigía una coincidencia exacta (`lesson card not found uniquely`), lo
+  que tumbaba la actividad sin intentarla. Ahora varias coincidencias abren la
+  primera y se avisa; cero sigue siendo error.
+- **Descubrir que no hay micrófono costaba 90 s.** Esa espera ahora es de 15 s
+  (`probe_timeout_ms`) y dice explícitamente que la actividad no tiene micrófono.
+
 ## Pendiente / parcial
 
-- **KeyVocabulary**: con `answers=[]` la tarjeta llega solo a ~1/N (p. ej. 1/18).
-  Para completarla haría falta un `"SS:<wordId>:1:false"` por palabra, leyendo los
-  `wordId` del carrusel del contenido. Fixeable, pero de valor limitado en lecciones
-  que además tienen conversación (ya topan <100% por eso).
+- **KeyVocabulary**: nada que arreglar. Se llegó a implementar el envío de un
+  `"SS:<wordId>:1:false"` por palabra del carrusel y se revirtió: las tarjetas ya
+  se completan con `answers=[]`, así que era cambiar el tráfico con un formato sin
+  verificar a cambio de nada. Si algún día una tarjeta se queda de verdad en 1/N,
+  los `wordId` están en `content[0].carousel` con `type: "word"`.
+
+- **`DialogueExpressionWithoutReco` (17 actividades)**: hueco abierto de verdad.
+  Son `multipleChoice` con sus `correct` presentes, la API los acepta y los deja
+  en 0, y la ruta de voz no les sirve porque no tienen micrófono.
 
 ## Resuelto
 
