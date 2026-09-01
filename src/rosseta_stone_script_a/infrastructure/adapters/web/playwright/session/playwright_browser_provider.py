@@ -51,6 +51,17 @@ class PlaywrightBrowserProvider(BrowserProviderPort, LoggingMixin):
             "--disable-blink-features=AutomationControlled",
             "--no-default-browser-check",
             "--disable-dev-shm-usage",
+            # Sin esto Chrome no deja arrancar un AudioContext hasta que haya un
+            # gesto de usuario "de verdad", y el reproductor de Fluency deja el
+            # micrófono deshabilitado esperando ese arranque. Es la diferencia
+            # entre que las actividades de conversación se puedan completar o no.
+            "--autoplay-policy=no-user-gesture-required",
+            # El reconocedor pide micrófono: que se conceda solo y que exista un
+            # dispositivo falso detrás, aunque el contenedor no tenga audio.
+            # Sin el segundo, el desplegable de la "Comprobación de micrófono"
+            # de Fluency sale vacío y su modal no deja avanzar.
+            "--use-fake-ui-for-media-stream",
+            "--use-fake-device-for-media-stream",
         ]
         if self.enable_no_sandbox:
             launch_args.append("--no-sandbox")

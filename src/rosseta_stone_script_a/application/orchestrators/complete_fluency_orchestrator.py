@@ -25,6 +25,24 @@ from rosseta_stone_script_a.infrastructure.state import RunProgressState
 from rosseta_stone_script_a.shared import events
 
 
+# Tipos que la API no acredita por mucho que se le mande el mensaje correcto:
+# el servidor sube ``attempts`` y deja ``percentComplete=0``. Se completan
+# abriendo la actividad en el navegador y dejando que el reproductor genere el
+# resultado real.
+#
+# Solo ``DialogueExpressionWithReco``, y es a propósito: es el único con botón
+# de micrófono, que es lo que esta ruta sabe manejar.
+#
+# Se probó a meter aquí ``DialogueExpressionWithoutReco`` y salió mal: "Without
+# Reco" significa literalmente sin reconocimiento de voz, así que la actividad
+# no tiene micrófono, la espera agotaba 90 s por actividad y terminaba fallando
+# igual. Queda como estaba: por API tampoco se completa, así que sigue siendo un
+# hueco abierto — pero un hueco barato, no uno que cuesta minuto y medio.
+#
+# Para probar otro tipo sin tocar código: FLUENCY_BROWSER_EXTRA_TYPES=Tipo1,Tipo2
+BROWSER_COMPLETED_TYPES = ("DialogueExpressionWithReco",)
+
+
 def fluency_activity_key(course_id: str, sequence_id: str, activity_id: str) -> str:
     return f"fluency|{course_id}|{sequence_id}|{activity_id}"
 
@@ -44,6 +62,7 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         speech_port: Optional[FluencySpeechPort] = None,
         duration_calculator: Optional[FluencyDurationCalculator] = None,
         send_usage_overhead: bool = False,
+        browser_completed_types: Optional[tuple] = None,
     ):
         super().__init__()
         self.api_port = api_port
@@ -55,6 +74,11 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         self.max_retries = max(0, max_retries)
         self.builder = builder or FluencyProgressBuilder()
         self.speech_port = speech_port
+        self.browser_completed_types = tuple(
+            browser_completed_types
+            if browser_completed_types is not None
+            else BROWSER_COMPLETED_TYPES
+        )
         self.duration_calculator = duration_calculator or FluencyDurationCalculator()
         # AddUsageOverhead's schema was never captured from real traffic (see
         # FluencyApiPort.add_usage_overhead); off by default so an unverified
@@ -160,7 +184,7 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         fabricated_step_count = sum(
             1
             for a in ordered_activities
-            if a.activity_type != "DialogueExpressionWithReco"
+            if a.activity_type not in self.browser_completed_types
             for s in a.steps
             if s.step_id
         )
@@ -192,7 +216,7 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
             key = fluency_activity_key(
                 course.course_id, sequence.sequence_id, activity.activity_id
             )
-            is_speech = activity.activity_type == "DialogueExpressionWithReco"
+            is_speech = activity.activity_type in self.browser_completed_types
             if not is_speech and self._state and self._state.is_done(key):
                 self.logger.info(
                     f"  Skipping activity {activity_number}/{total_activities}: "
