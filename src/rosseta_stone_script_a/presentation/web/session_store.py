@@ -28,10 +28,16 @@ SESSION_KEYS = (
     "lang_code",
     "assessment_id",
     "product",
+    # Panel del aprendiz: bearer del login y el GUID de la cuenta (que no es el
+    # user_id numérico del tracking), más las horas que la plataforma reconoce.
+    "access_token",
+    "user_guid",
+    "hours_total",
+    "hours_elearning",
 )
 
 # Which of those are credentials rather than identifiers.
-SECRET_KEYS = ("authorization", "session_token")
+SECRET_KEYS = ("authorization", "session_token", "access_token")
 
 
 class SessionStore:

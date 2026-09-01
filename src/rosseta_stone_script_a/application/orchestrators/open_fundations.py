@@ -1,10 +1,16 @@
 import asyncio
 from typing import Any, Dict
 
+from rosseta_stone_script_a.application.ports.learner_dashboard import (
+    LearnerDashboardPort,
+)
 from rosseta_stone_script_a.application.ports.orchestrator import OrchestratorPort
 from rosseta_stone_script_a.application.ports.web import IWebSession
 from rosseta_stone_script_a.application.services.fluency_session_capturer import (
     FluencySessionCapturer,
+)
+from rosseta_stone_script_a.application.services.learner_auth_capturer import (
+    LearnerAuthCapturer,
 )
 from rosseta_stone_script_a.application.services.rosetta_session_capturer import (
     RosettaSessionCapturer,
@@ -40,6 +46,8 @@ class OpenFundations(OrchestratorPort):
         web_session: IWebSession,
         session_capturer: RosettaSessionCapturer,
         fluency_capturer: FluencySessionCapturer | None = None,
+        learner_auth_capturer: LearnerAuthCapturer | None = None,
+        learner_dashboard: LearnerDashboardPort | None = None,
     ):
         super().__init__()
         self.login_use_case = login_use_case
@@ -47,6 +55,9 @@ class OpenFundations(OrchestratorPort):
         self.web_session = web_session
         self.session_capturer = session_capturer
         self.fluency_capturer = fluency_capturer or FluencySessionCapturer()
+        self.learner_auth_capturer = learner_auth_capturer or LearnerAuthCapturer()
+        # Sin panel inyectado la corrida funciona igual; solo no se comprueba.
+        self.learner_dashboard = learner_dashboard
 
     async def execute(self, credentials: Credentials) -> Dict[str, Any]:
         """
@@ -69,6 +80,9 @@ class OpenFundations(OrchestratorPort):
             self.logger.info("Starting network interception for session capture")
             monitor.add_request_listener(self.session_capturer.handle_request)
             monitor.add_request_listener(self.fluency_capturer.handle_request)
+            # Las credenciales del panel del aprendiz viajan en el *cuerpo* de
+            # la respuesta del login, no en cabeceras de peticiones.
+            self._add_response_listener(monitor)
         else:
             self.logger.warning("Network monitor not available for session capture")
 
@@ -96,6 +110,7 @@ class OpenFundations(OrchestratorPort):
         if monitor:
             monitor.remove_request_listener(self.session_capturer.handle_request)
             monitor.remove_request_listener(self.fluency_capturer.handle_request)
+            self._remove_response_listener(monitor)
 
         # Log field names only. Session values can contain authorization tokens.
         self.logger.info(
@@ -116,8 +131,61 @@ class OpenFundations(OrchestratorPort):
             False,
         )
 
+        # Comprobación: lo que la plataforma dice que esta cuenta ha estudiado.
+        # Es lo único que no sale de nuestras propias suposiciones.
+        captured_data.update(await self._read_learner_hours())
+
         self.logger.info(f"Product entry workflow completed ({product.value})")
         return captured_data
+
+    def _add_response_listener(self, monitor: Any) -> None:
+        """Escucha respuestas, si el monitor sabe hacerlo."""
+        adder = getattr(monitor, "add_response_listener", None)
+        if adder is None:
+            self.logger.debug(
+                "El monitor de red no escucha respuestas; no habrá horas del panel"
+            )
+            return
+        adder(self.learner_auth_capturer.handle_response)
+
+    def _remove_response_listener(self, monitor: Any) -> None:
+        remover = getattr(monitor, "remove_response_listener", None)
+        if remover is not None:
+            remover(self.learner_auth_capturer.handle_response)
+
+    async def _read_learner_hours(self) -> Dict[str, Any]:
+        """Horas reconocidas por la plataforma, más las credenciales que las leen.
+
+        Devuelve solo lo que consiguió: sin panel inyectado, sin credenciales o
+        con el panel caído, la corrida continúa exactamente igual que antes.
+        """
+        learner_auth = self.learner_auth_capturer.get_captured_data()
+        enriched: Dict[str, Any] = {
+            key: value for key, value in learner_auth.items() if value
+        }
+
+        if self.learner_dashboard is None:
+            return enriched
+        if not self.learner_auth_capturer.is_complete():
+            self.logger.info(
+                "Sin credenciales del panel del aprendiz: no se pueden leer las horas"
+            )
+            return enriched
+
+        hours = await self.learner_dashboard.get_hours(
+            learner_auth["access_token"], learner_auth["user_guid"]
+        )
+        if hours is None:
+            return enriched
+
+        enriched["hours_total"] = hours.total_hours
+        enriched["hours_elearning"] = hours.elearning_hours
+        self.logger.info(
+            "La plataforma reconoce %.3f h totales (%.3f h de curso) a esta cuenta",
+            hours.total_hours,
+            hours.elearning_hours,
+        )
+        return enriched
 
     async def _wait_for_capture(
         self, capturer, label: str, require_exam_data: bool = False
