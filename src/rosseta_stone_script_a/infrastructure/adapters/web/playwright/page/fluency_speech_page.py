@@ -666,6 +666,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             if await self._dismiss_microphone_check():
                 await self._click_speech_button()
             await self._wait_for_microphone(peticiones)
+            await self._wait_until_recording()
             await self.page.evaluate(
                 "audio => window.__rosettaFeedMicrophone(audio)",
                 base64.b64encode(audio).decode("ascii"),
@@ -691,6 +692,24 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         )
         await self._dump_screenshot("respuesta_no_aceptada")
         return False
+
+    async def _wait_until_recording(self) -> None:
+        """Espera a que el botón entre en modo grabación antes de hablar.
+
+        Inyectar el audio nada más pulsar se comía el principio de la frase: el
+        primer intento salía casi siempre "Volver a intentar" y entraba el
+        segundo. Parado quiere decir que el botón enseña el micrófono
+        (``data-qa=MicIcon``); grabando, lo cambia por su animación. Es de mejor
+        esfuerzo: si la señal no llega, se habla igual.
+        """
+        try:
+            await self.page.wait_for_function(
+                "() => { const b = document.querySelector('[data-qa=SpeechButton]'); "
+                "return b && !b.querySelector('[data-qa=MicIcon]'); }",
+                timeout=self.probe_timeout_ms,
+            )
+        except PlaywrightTimeoutError:
+            self.logger.debug("  El micrófono no avisó de estar grabando; se sigue")
 
     async def _submit_verdict(self) -> str:
         """Qué dice el botón de enviar después de hablar.

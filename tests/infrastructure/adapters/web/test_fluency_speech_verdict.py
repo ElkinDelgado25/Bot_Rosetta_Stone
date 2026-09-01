@@ -66,3 +66,24 @@ class TestSubmitVerdict:
         speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
         asyncio.run(speech._submit_verdict())
         assert speech.probe_timeout_ms < speech.timeout_ms
+
+
+class TestWaitUntilRecording:
+    """Hablar antes de que el botón esté grabando cuesta un intento.
+
+    Inyectar el audio nada más pulsar se come el principio de la frase: el
+    primer intento salía casi siempre "Volver a intentar" y entraba el segundo.
+    """
+
+    def test_it_waits_for_the_mic_icon_to_go(self):
+        page = _Page()
+        speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
+        asyncio.run(speech._wait_until_recording())
+        assert "MicIcon" in page.consultado[-1]
+        assert "SpeechButton" in page.consultado[-1]
+
+    def test_a_missing_signal_does_not_stop_the_step(self):
+        """Es de mejor esfuerzo: hablar tarde es mejor que no hablar."""
+        page = _Page(responde=False)
+        speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
+        asyncio.run(speech._wait_until_recording())  # no lanza
