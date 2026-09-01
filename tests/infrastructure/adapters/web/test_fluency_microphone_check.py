@@ -1,10 +1,16 @@
 """El modal de "Comprobación de micrófono".
 
 Lo que en realidad bloqueaba las actividades de conversación: una capa por
-encima de todo, con un desplegable de dispositivos y un botón *Comenzar*.
-Detrás de ella ningún clic llegaba a las respuestas y el micrófono seguía
-deshabilitado; durante once corridas pareció un problema de selectores, hasta
-que un fotograma de la traza lo enseñó.
+encima de todo (``position: fixed``, ``z-index: 7000``). Detrás de ella ningún
+clic llegaba a las respuestas y el micrófono seguía deshabilitado; durante once
+corridas pareció un problema de selectores, hasta que un fotograma de la traza
+lo enseñó.
+
+Tiene **dos caras** y solo la primera tiene botón: elegir dispositivo y pulsar
+*Comenzar*, y después "Comprobando el micrófono...", que se queda escuchando
+sin nada que pulsar. Buscar el botón en la segunda decía "no se encontró el
+modal" mientras seguía tapando la pantalla, así que lo que se mira es la
+ventana (``CalibrationWindow``) y lo que se espera es que se vaya.
 """
 
 import asyncio
@@ -15,6 +21,17 @@ from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page import (
 from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
 )
+
+
+ESCUCHANDO = {
+    "presente": True,
+    "escuchando": True,
+    "barras": 10,
+    "encendidas": 1,
+    "senal": True,
+    "texto": "Comprobando el micrófono...",
+}
+SIN_MODAL = {"presente": False}
 
 
 class _Opciones:
@@ -65,19 +82,48 @@ class _Boton:
 
 
 class _Page:
-    """El reproductor: el botón puede estar en cualquiera de las tres vías."""
+    """El reproductor: el botón puede estar en cualquiera de las tres vías.
 
-    def __init__(self, boton=None, selector=None, donde="por rol", vigilante=False):
+    *calibracion* es lo que devuelve ``__rosettaMicCheckState`` (``None`` si el
+    guion no llegó a instalarse) y *se_cierra* dice si la ventana acaba
+    yéndose, que es la única señal de que la comprobación pasó.
+    """
+
+    def __init__(
+        self,
+        boton=None,
+        selector=None,
+        donde="por rol",
+        vigilante=False,
+        calibracion=ESCUCHANDO,
+        se_cierra=False,
+    ):
         self.boton = boton if boton is not None else _Boton()
         self.vacio = _Boton(cuantos=0)
         self.selector = selector if selector is not None else _Selector()
         self.donde = donde
         self.vigilante = vigilante
+        self.calibracion = calibracion
+        self.se_cierra = se_cierra
         self.rol_pedido = None
+        self.despedidas = 0
+        self.esperas = 0
 
     async def evaluate(self, expression, *args):
-        # El vigilante inyectado: dice si él mismo ya cerró el modal.
+        if "__rosettaMicCheckState" in expression:
+            return self.calibracion
+        if "__rosettaDismissMicCheck" in expression:
+            self.despedidas += 1
+            return self.vigilante
         return self.vigilante
+
+    async def wait_for_function(self, expression, *args, **kwargs):
+        self.esperas += 1
+        if not self.se_cierra:
+            raise modulo.PlaywrightTimeoutError("la ventana sigue ahí")
+
+    async def screenshot(self, path=None):
+        return None
 
     def get_by_role(self, role, name=None):
         self.rol_pedido = (role, name)
@@ -95,20 +141,49 @@ class _Page:
 
 def _dismiss(page):
     speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
-    asyncio.run(speech._dismiss_microphone_check())
+    return asyncio.run(speech._dismiss_microphone_check())
 
 
 class TestMicrophoneCheck:
+    def test_without_the_modal_it_does_nothing(self):
+        """Sin ventana no hay nada que cerrar, y decirlo ahorra los intentos.
+
+        Antes se pulsaba a ciegas en cada paso y se registraba "no se encontró
+        el botón del modal" aunque no hubiera modal ninguno.
+        """
+        page = _Page(calibracion=SIN_MODAL)
+        _dismiss(page)
+        assert page.boton.pulsado is False
+        assert page.esperas == 0
+
+    def test_the_watcher_gets_the_first_word(self):
+        """Si el vigilante lo cierra y la ventana se va, no se toca nada más."""
+        page = _Page(se_cierra=True)
+        _dismiss(page)
+        assert page.boton.pulsado is False
+        assert page.selector.elegido is None
+
+    def test_it_waits_for_the_window_to_go(self):
+        """Que el botón se pulse no es que la comprobación haya pasado.
+
+        La ventana se queda escuchando después, y mientras está tapa las
+        respuestas: seguir adelante solo gastaba los cinco intentos de marcar
+        una respuesta contra el modal.
+        """
+        page = _Page(se_cierra=True)
+        _dismiss(page)
+        assert page.esperas == 1
+
+    def test_if_the_window_stays_it_falls_back_to_pressing(self):
+        page = _Page(se_cierra=False)
+        _dismiss(page)
+        assert page.boton.pulsado is True
+
     def test_picks_a_device_and_starts(self):
         page = _Page()
         _dismiss(page)
         assert page.selector.elegido == 1  # la última opción disponible
         assert page.boton.pulsado is True
-
-    def test_without_the_modal_it_does_nothing(self):
-        page = _Page(boton=_Boton(cuantos=0))
-        _dismiss(page)
-        assert page.boton.pulsado is False
 
     def test_it_finds_the_button_by_data_qa(self):
         """*Comenzar* no es un <button>: buscarlo por rol no encuentra nada.
@@ -155,17 +230,34 @@ class TestMicrophoneCheck:
         _dismiss(page)
         assert page.boton.pulsado is True
 
-    def test_the_watcher_gets_the_first_word(self):
-        """Si el vigilante ya lo cerró, no se toca nada más."""
-        page = _Page(vigilante=True)
-        _dismiss(page)
-        assert page.boton.pulsado is False
-
     def test_it_looks_for_the_spanish_and_english_labels(self):
         page = _Page()
         _dismiss(page)
         patron = page.rol_pedido[1].pattern
         assert "comenzar" in patron and "start" in patron
+
+    def test_it_reports_whether_there_was_a_check(self):
+        """El que llama lo necesita: la comprobación se come la pulsación del
+        micrófono, y hay que volver a pulsarlo solo si de verdad apareció."""
+        assert _dismiss(_Page(calibracion=SIN_MODAL)) is False
+        assert _dismiss(_Page(se_cierra=True)) is True
+
+    def test_without_the_script_it_never_claims_there_was_one(self):
+        """Sin saberlo, decir que sí haría pulsar el micrófono dos veces.
+
+        Y la segunda pulsación lo apaga.
+        """
+        assert _dismiss(_Page(calibracion=None)) is False
+
+    def test_without_the_script_it_still_tries(self):
+        """Si el guion no se instaló, ``__rosettaMicCheckState`` no existe.
+
+        Ahí no se sabe si hay modal, así que se intenta igual: es el camino que
+        había antes de saber mirar la ventana.
+        """
+        page = _Page(calibracion=None)
+        _dismiss(page)
+        assert page.boton.pulsado is True
 
 
 class TestAutoDismissWatcher:
@@ -195,6 +287,35 @@ class TestAutoDismissWatcher:
         """La comprobación falla la primera vez y ofrece "Volver a intentar"."""
         assert "volver a intentar" in modulo._VIRTUAL_MIC_SCRIPT
 
+    def test_it_presses_continue_on_the_success_dialog(self):
+        """Hay una tercera cara: "Comprobación de micrófono exitosa".
+
+        Sale con un *Continuar* y se queda ahí tapando la actividad aunque la
+        comprobación haya ido bien: el botón de enviar seguía diciendo "Omitir"
+        hasta agotar los 90 s.
+        """
+        guion = modulo._VIRTUAL_MIC_SCRIPT
+        assert "continuar|continue" in guion
+
+    def test_continue_is_only_pressed_inside_the_window(self):
+        """"Continuar" sale en media plataforma; fuera de la ventana no se toca."""
+        guion = modulo._VIRTUAL_MIC_SCRIPT
+        dentro = guion.index("continuar|continue")
+        etiquetas = guion.index("const etiquetas = ventana")
+        assert etiquetas < dentro
+        # La rama sin ventana no lo lleva.
+        sin_ventana = guion.index(
+            ": /^(comenzar|start|volver a intentar|try again|retry)$/i;"
+        )
+        assert sin_ventana > dentro
+
+    def test_it_recognises_the_window_by_data_qa(self):
+        """La segunda cara del modal no tiene botón: se la reconoce por la
+        ventana, no por lo que se pueda pulsar dentro."""
+        guion = modulo._VIRTUAL_MIC_SCRIPT
+        assert "CalibrationWindow" in guion
+        assert "__rosettaMicCheckState" in guion
+
 
 class TestMicrophoneSignal:
     """Un micrófono virtual sin nada inyectado es silencio.
@@ -207,8 +328,25 @@ class TestMicrophoneSignal:
         guion = modulo._VIRTUAL_MIC_SCRIPT
         assert "__rosettaStartMicNoise" in guion
         assert "createOscillator" in guion
-        # Conectada al mismo destino que hace de micrófono.
-        assert "connect(state.destination)" in guion
+
+    def test_the_signal_goes_to_a_bus_that_outlives_the_destination(self):
+        """El destino se crea en cada ``getUserMedia``, la señal no.
+
+        Conectando al destino de turno, lo que empezara a sonar antes de que la
+        página pidiera el micrófono acababa conectado a nada: el medidor de la
+        comprobación se quedaba en una barra de diez y la ventana no se iba.
+        """
+        guion = modulo._VIRTUAL_MIC_SCRIPT
+        assert "connect(state.bus)" in guion
+        assert "state.bus.connect(state.destination)" in guion
+        assert "connect(state.destination)" not in guion.replace(
+            "state.bus.connect(state.destination)", ""
+        )
+
+    def test_the_signal_can_start_before_the_page_asks_for_the_mic(self):
+        # asegurarContexto() crea contexto y bus sin esperar a getUserMedia.
+        guion = modulo._VIRTUAL_MIC_SCRIPT
+        assert "asegurarContexto" in guion
 
     def test_the_signal_starts_before_pressing(self):
         guion = modulo._VIRTUAL_MIC_SCRIPT
@@ -216,11 +354,23 @@ class TestMicrophoneSignal:
         clic = guion.index("emitirClic(objetivo);")
         assert inicio < clic
 
-    def test_the_signal_does_not_stay_forever(self):
-        # Un zumbido permanente estorbaría al reconocedor después.
+    def test_the_signal_stops_when_the_window_goes(self):
+        """Un zumbido permanente estorbaría al reconocedor después.
+
+        Lo decidía un temporizador de 30 s, que tanto podía cortar a mitad de
+        la comprobación como seguir sonando encima de la respuesta. Ahora dura
+        exactamente lo que dura la ventana.
+        """
         guion = modulo._VIRTUAL_MIC_SCRIPT
         assert "__rosettaStopMicNoise" in guion
-        assert "setTimeout" in guion
+        assert "setTimeout" not in guion
+
+    def test_feeding_an_answer_silences_the_check_loop(self):
+        """Si el bucle del "1, 2, 3, 4, 5" sigue, el reconocedor oye las dos."""
+        guion = modulo._VIRTUAL_MIC_SCRIPT
+        alimentar = guion.index("__rosettaFeedMicrophone")
+        parada = guion.index("__rosettaStopMicNoise();", alimentar)
+        assert parada > alimentar
 
 
 class TestFakeAudioDevice:

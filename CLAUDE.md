@@ -348,6 +348,7 @@ Un JSON tocado a mano en Windows lleva BOM. `json.load` revienta. Se lee con `en
 | "0 completadas" tras ejecutar | Sesión no se capturó | Mira el log en vivo: ¿envió algo? |
 | Corrida detiene en una lección | `fluency_max_lessons` puesto | Saca el límite del perfil |
 | Lección en ~95% | Tiene actividades de voz | Está documentado: no se puede completar por API |
+| "el paso N no llegó a seleccionar ninguna respuesta" | El modal de micrófono está encima (`z-index: 7000`) | No es un problema de clics: mira el medidor en el log. Ver `docs/FLUENCY_BUILDER.md` |
 | Chips vuelven a `idle` tras reiniciar | Último estado vive en memoria | Sí, el progreso persiste en disco |
 | `Could not launch a browser` | No hay Chrome/Edge en el PATH | `uv run playwright install chromium` |
 | La UI no responde (Docker reinició) | Imagen vieja | Reconstruye: `docker compose up -d --build --force-recreate` |

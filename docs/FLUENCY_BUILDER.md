@@ -356,6 +356,67 @@ Lo que hace falta para pasarlo:
    tono de 220 Hz.
 4. *Comenzar* no es un `<button>`: es un `div`/`span` con `data-qa`. Buscarlo
    por rol devuelve cero y el modal se queda abierto en silencio.
+5. **La señal tiene que llegar de verdad al micrófono** (01-09-2026). El
+   destino (`MediaStreamDestination`) se crea *dentro* de `getUserMedia`, y la
+   señal arrancaba antes de que la página pidiera el micrófono: se conectaba a
+   un destino que aún no existía y no sonaba nada. Se ve en el medidor
+   (`[data-qa=CalibrateMeter]`): **1 barra encendida de 10** y la ventana sin
+   irse nunca. La forma que funciona es un `GainNode` permanente —el bus— al
+   que se conecta todo, y que `getUserMedia` engancha a cada destino nuevo. Así
+   da igual el orden, y sobrevive a que la página vuelva a pedir el micrófono.
+
+**El modal tiene dos caras y solo una tiene botón** (01-09-2026). Primero
+elegir dispositivo y *Comenzar*; después "Comprobando el micrófono…", que se
+queda escuchando sin nada que pulsar. Buscar el botón en la segunda registraba
+`por rol=0, por data-qa=0, por texto=0` — que se lee como "no hay modal"— mientras
+la ventana seguía tapando la pantalla entera (`position: fixed`, `z-index: 7000`).
+Se reconoce por `[data-qa=CalibrationWindow]`, y lo que hay que esperar es a que
+**desaparezca**: pulsar el botón no es que la comprobación haya pasado.
+
+El síntoma, si no se espera, engaña del todo: las cinco formas de marcar una
+respuesta fallan una tras otra y el log dice "el paso 1 no llegó a seleccionar
+ninguna respuesta". No es que la respuesta no se pueda pulsar — es que hay un
+modal encima. El altavoz de la respuesta sí sonaba, lo que despista más todavía
+(cae fuera del modal).
+
+Y hay una **tercera cara**: "Comprobación de micrófono exitosa · ¡Está todo
+listo!" con un *Continuar*. Sale cuando la prueba ha ido **bien** y aun así se
+queda esperando encima de la actividad. El vigilante solo conocía *Comenzar* y
+*Volver a intentar*, así que ahí se plantaba. Además esa comprobación se come
+la primera pulsación del micrófono de la actividad: hay que volver a pulsarlo
+cuando la ventana se ha ido.
+
+## El paso de conversación, resuelto (01-09-2026)
+
+Con la comprobación pasada, quedaban cuatro cosas mal entendidas. Las cuatro se
+vieron en corridas reales, y cada una escondía a la siguiente:
+
+1. **La respuesta no se marca: se dice.** Se gastaban cinco formas de pulsar la
+   ficha y se daba el paso por perdido. No hace falta ninguna: el reconocedor
+   decide cuál de las tres has dicho. Se comprobó sin ninguna marcada — el
+   reproductor escuchó y contestó. Marcar sigue intentándose porque ayuda, pero
+   no marcar ya no hunde el paso.
+2. **El micrófono se pide una sola vez.** ``getUserMedia`` se llama en la
+   comprobación y el reproductor reutiliza ese ``MediaStream``. Esperar una
+   segunda llamada eran 90 s muertos; y aun con un sondeo corto, esperar 15 s
+   antes de inyectar es peor que inútil: el reconocedor escucha unos segundos y
+   si no oye nada da la respuesta por no entendida.
+3. **El botón de enviar solo tiene dos textos mientras el paso no se resuelve:**
+   "Omitir" (no ha oído nada) y "Volver a intentar" (ha oído y no ha entendido).
+   Dar por buena "cualquier cosa que no sea Omitir" hacía pulsar *Volver a
+   intentar*, que **reinicia el paso**: el enunciado no cambiaba nunca y la
+   espera moría a los 90 s señalando al sitio equivocado. Ahora "Volver a
+   intentar" es un veredicto y se vuelve a hablar (3 intentos por paso).
+4. **"Próximo paso" llega deshabilitado.** Con la respuesta aceptada el pie se
+   vuelve morado con "Esta es la respuesta correcta" y el botón cambia — pero
+   está deshabilitado mientras suena la confirmación, así que el primer clic se
+   pierde. Se pulsa hasta que el enunciado cambie.
+
+Resultado medido: **10 pasos de 10** en una actividad
+``DialogueExpressionWithReco`` real, y ``getProgress`` devolviendo
+``percentComplete=1``. Un detalle constante: el **primer intento de habla casi
+siempre se rechaza y el segundo entra**; por eso los reintentos no son un
+adorno.
 
 **El audio de referencia se saca del buffer que suena, no de la URL.** La media
 va firmada (500 al descargarla, incluso desde dentro de la página) y se descifra

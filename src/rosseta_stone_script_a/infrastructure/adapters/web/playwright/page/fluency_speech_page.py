@@ -26,18 +26,36 @@ _VIRTUAL_MIC_SCRIPT = r"""
   window.__rosettaVirtualMicInstalled = true;
   window.__rosettaMicReady = false;
   window.__rosettaMicPlaybackDone = false;
+  // Cuántas veces ha pedido el micrófono la página. El reproductor lo pide una
+  // sola vez —en la comprobación— y reutiliza ese MediaStream para toda la
+  // actividad, así que "¿lo ha vuelto a pedir?" no sirve para saber si está
+  // listo; esto permite distinguir una petición nueva de la reutilización.
+  window.__rosettaMicRequests = 0;
 
   const devices = navigator.mediaDevices;
   const original = devices.getUserMedia.bind(devices);
-  const state = { context: null, destination: null };
+  const state = { context: null, destination: null, bus: null };
+
+  // Un solo "bus" de micrófono, creado una vez y conectado a cada destino que
+  // entregue getUserMedia. Antes cada fuente se conectaba al destino de turno,
+  // y el destino solo existe cuando la página ya ha pedido el micrófono: la
+  // señal de la calibración arrancaba antes de esa petición, se conectaba a
+  // nada, y el medidor se quedaba en una barra. Con el bus da igual el orden.
+  const asegurarContexto = async () => {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!state.context) state.context = new AudioContextClass({ sampleRate: 48000 });
+    if (!state.bus) state.bus = state.context.createGain();
+    try { await state.context.resume(); } catch (e) {}
+    return state.context;
+  };
 
   devices.getUserMedia = async (constraints) => {
     if (!constraints || !constraints.audio) return original(constraints);
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    state.context = state.context || new AudioContextClass({ sampleRate: 48000 });
-    await state.context.resume();
+    await asegurarContexto();
     state.destination = state.context.createMediaStreamDestination();
+    state.bus.connect(state.destination);
     window.__rosettaMicReady = true;
+    window.__rosettaMicRequests = (window.__rosettaMicRequests || 0) + 1;
     return state.destination.stream;
   };
 
@@ -87,8 +105,7 @@ _VIRTUAL_MIC_SCRIPT = r"""
   window.__rosettaPrepareMicCheckAudio = async (codificado) => {
     window.__rosettaMicCheckAudio = codificado;
     try {
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      const contexto = state.context || new AudioContextClass({ sampleRate: 48000 });
+      const contexto = await asegurarContexto();
       const binario = atob(codificado);
       const bytes = new Uint8Array(binario.length);
       for (let i = 0; i < binario.length; i += 1) bytes[i] = binario.charCodeAt(i);
@@ -100,64 +117,113 @@ _VIRTUAL_MIC_SCRIPT = r"""
   };
 
   window.__rosettaMicNoise = null;
+  // Arranca la señal sin esperar a que la página haya pedido el micrófono: va
+  // al bus, y el bus se engancha solo al destino que se cree después.
   window.__rosettaStartMicNoise = () => {
-    if (!state.context || !state.destination || window.__rosettaMicNoise) return false;
+    if (window.__rosettaMicNoise) return true;
+    window.__rosettaMicNoise = "arrancando";
+    asegurarContexto().then(() => {
+      if (window.__rosettaMicNoise !== "arrancando") return;
 
-    if (window.__rosettaMicCheckBuffer) {
-      const fuente = state.context.createBufferSource();
-      fuente.buffer = window.__rosettaMicCheckBuffer;
-      fuente.loop = true;
-      fuente.connect(state.destination);
-      fuente.start();
-      window.__rosettaMicNoise = { oscilador: fuente, volumen: fuente };
-      return true;
-    }
+      if (window.__rosettaMicCheckBuffer) {
+        const fuente = state.context.createBufferSource();
+        fuente.buffer = window.__rosettaMicCheckBuffer;
+        fuente.loop = true;
+        fuente.connect(state.bus);
+        fuente.start();
+        window.__rosettaMicNoise = { oscilador: fuente, volumen: fuente };
+        return;
+      }
 
-    const oscilador = state.context.createOscillator();
-    const volumen = state.context.createGain();
-    oscilador.type = "sine";
-    oscilador.frequency.value = 220;
-    volumen.gain.value = 0.25;
-    oscilador.connect(volumen);
-    volumen.connect(state.destination);
-    oscilador.start();
-    window.__rosettaMicNoise = { oscilador, volumen };
+      const oscilador = state.context.createOscillator();
+      const volumen = state.context.createGain();
+      oscilador.type = "sine";
+      oscilador.frequency.value = 220;
+      volumen.gain.value = 0.25;
+      oscilador.connect(volumen);
+      volumen.connect(state.bus);
+      oscilador.start();
+      window.__rosettaMicNoise = { oscilador, volumen };
+    }).catch(() => { window.__rosettaMicNoise = null; });
     return true;
   };
   window.__rosettaStopMicNoise = () => {
     const activo = window.__rosettaMicNoise;
     if (!activo) return false;
+    window.__rosettaMicNoise = null;
+    if (activo === "arrancando") return true;
     try { activo.oscilador.stop(); } catch (e) {}
     try { activo.volumen.disconnect(); } catch (e) {}
-    window.__rosettaMicNoise = null;
     return true;
   };
 
+  // La comprobación tiene dos caras y solo una tiene botón: primero elegir
+  // dispositivo y pulsar *Comenzar*, y después "Comprobando el micrófono...",
+  // que se queda escuchando sin nada que pulsar. Mirar solo el botón daba
+  // "no se encontró el modal" mientras seguía tapando la pantalla entera
+  // (va en `position: fixed` con `z-index: 7000`, así que ningún clic a las
+  // respuestas llegaba).
+  const ventanaCalibracion = () =>
+    document.querySelector('[data-qa="CalibrationWindow"]');
+
+  window.__rosettaMicCheckState = () => {
+    const ventana = ventanaCalibracion();
+    if (!ventana) return { presente: false };
+    const medidor = ventana.querySelector('[data-qa="CalibrateMeter"]');
+    return {
+      presente: true,
+      escuchando: Boolean(
+        ventana.querySelector('[data-qa="mic_calibration_checking_microphone"]')
+      ),
+      barras: medidor ? medidor.querySelectorAll(".bar").length : 0,
+      encendidas: medidor ? medidor.querySelectorAll(".lit").length : 0,
+      senal: Boolean(window.__rosettaMicNoise),
+      texto: (ventana.textContent || "").trim().slice(0, 120),
+    };
+  };
+
   window.__rosettaDismissMicCheck = () => {
-    for (const nodo of document.querySelectorAll("div, span, button")) {
+    const ventana = ventanaCalibracion();
+    // La señal primero: el botón arranca la escucha, y si para entonces no
+    // suena nada la comprobación se agota antes de que nos dé tiempo.
+    if (ventana) window.__rosettaStartMicNoise();
+    const raiz = ventana || document;
+    // "Continuar" solo se acepta dentro de la ventana de calibración: es el
+    // botón del tercer diálogo, "Comprobación de micrófono exitosa · ¡Está
+    // todo listo!", que se queda esperando y tapando la actividad aunque la
+    // comprobación haya salido bien. Fuera de la ventana no se toca, que
+    // "Continuar" es una palabra que sale en media plataforma.
+    const etiquetas = ventana
+      ? /^(comenzar|start|continuar|continue|volver a intentar|try again|retry)$/i
+      : /^(comenzar|start|volver a intentar|try again|retry)$/i;
+    for (const nodo of raiz.querySelectorAll("div, span, button")) {
       if (nodo.children.length) continue;
       const texto = (nodo.textContent || "").trim();
       // "Volver a intentar" aparece cuando la comprobación falló: hay que
       // pulsarlo también, ya con la señal sonando.
-      if (!/^(comenzar|start|volver a intentar|try again|retry)$/i.test(texto)) continue;
+      if (!etiquetas.test(texto)) continue;
       const objetivo = nodo.closest("[data-qa], button") || nodo;
-      window.__rosettaStartMicNoise();
       emitirClic(objetivo);
       emitirClic(nodo);
       window.__rosettaMicCheckDismissed = true;
-      // La señal se queda un rato: la comprobación dura unos segundos.
-      clearTimeout(window.__rosettaNoiseTimer);
-      window.__rosettaNoiseTimer = setTimeout(
-        () => window.__rosettaStopMicNoise(), 30000
-      );
       return true;
     }
     return false;
   };
 
   window.__rosettaMicCheckDismissed = false;
+  // Mientras la ventana esté, la señal suena; cuando se va, se calla. Antes lo
+  // decidía un temporizador de 30 s que tanto podía cortar a mitad de la
+  // comprobación como seguir sonando encima de la respuesta.
+  const atenderCalibracion = () => {
+    if (ventanaCalibracion()) {
+      window.__rosettaDismissMicCheck();
+    } else if (window.__rosettaMicNoise) {
+      window.__rosettaStopMicNoise();
+    }
+  };
   const vigilante = new MutationObserver(() => {
-    try { window.__rosettaDismissMicCheck(); } catch (e) {}
+    try { atenderCalibracion(); } catch (e) {}
   });
   const arrancarVigilante = () => {
     if (document.documentElement) {
@@ -174,13 +240,16 @@ _VIRTUAL_MIC_SCRIPT = r"""
     if (!state.context || !state.destination) {
       throw new Error("virtual microphone is not ready");
     }
+    // El bucle de la calibración ("1, 2, 3, 4, 5") no puede seguir sonando por
+    // encima de la respuesta: el reconocedor oiría las dos cosas mezcladas.
+    window.__rosettaStopMicNoise();
     const binary = atob(encodedAudio);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
     const buffer = await state.context.decodeAudioData(bytes.buffer.slice(0));
     const source = state.context.createBufferSource();
     source.buffer = buffer;
-    source.connect(state.destination);
+    source.connect(state.bus);
     window.__rosettaMicPlaybackDone = false;
     source.onended = () => { window.__rosettaMicPlaybackDone = true; };
     // Give the recognizer a short lead-in after it receives the MediaStream.
@@ -323,6 +392,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         timeout_ms: int = 90_000,
         probe_timeout_ms: int = 15_000,
         trace_dir=None,
+        speech_attempts: int = 3,
     ) -> None:
         self.page = page
         self.timeout_ms = timeout_ms
@@ -334,6 +404,9 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         # mismo que esperar a que cargue una que sí lo tiene. Con el timeout
         # largo, un tipo mal enrutado se comía 90 s por actividad.
         self.probe_timeout_ms = probe_timeout_ms
+        # Que el reconocedor no entienda una respuesta no es un fallo: a una
+        # persona también le pasa, y el reproductor ofrece "Volver a intentar".
+        self.speech_attempts = max(1, speech_attempts)
 
     async def complete_activity(
         self,
@@ -503,44 +576,160 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         choice = choices.first
         audio = await self._capture_choice_audio(choice)
         await self._wait_for_silence()
+        # Marcar la respuesta ayuda, pero **no es obligatorio**: en esta
+        # actividad se contesta hablando, y el reconocedor decide cuál de las
+        # tres has dicho. Se comprobó en una corrida real — sin ninguna marcada,
+        # el reproductor escuchó y contestó "Volver a intentar", que es un
+        # veredicto, no un bloqueo. Tratarlo como error hundía el paso antes de
+        # llegar a hablar, que es lo único que de verdad lo resuelve.
         if not await self._select_choice(choice):
-            self.logger.error(
-                "  El paso %d no llegó a seleccionar ninguna respuesta", step_number
+            self.logger.info(
+                "  El paso %d no marcó ninguna respuesta; se contesta hablando",
+                step_number,
             )
-            await self._report_button_state()
+
+        if not await self._speak_until_accepted(audio, step_number):
             return False
 
-        await self.page.evaluate(
-            "() => { window.__rosettaMicReady = false; "
-            "window.__rosettaMicPlaybackDone = false; }"
-        )
-        await self._click_speech_button()
-        await self._wait(
-            "() => window.__rosettaMicReady === true",
-            "que el reproductor pida el micrófono (getUserMedia)",
-        )
-        await self.page.evaluate(
-            "audio => window.__rosettaFeedMicrophone(audio)",
-            base64.b64encode(audio).decode("ascii"),
-        )
-        await self._wait(
-            "() => window.__rosettaMicPlaybackDone === true",
-            "que termine de sonar el audio inyectado en el micrófono",
-        )
+        self.logger.info("  Paso %d resuelto; se pasa al siguiente", step_number)
+        if not await self._advance_to_next_step(previous_prompt):
+            self.logger.error(
+                "  El paso %d quedó resuelto pero el reproductor no avanzó",
+                step_number,
+            )
+            await self._dump_screenshot("sin_avanzar_de_paso")
+            return False
+        return True
 
-        submit = self.page.get_by_test_id("SubmitButton")
-        await self._wait(
+    async def _advance_to_next_step(self, previous_prompt: str) -> bool:
+        """Pulsa *Próximo paso* hasta que el enunciado cambie.
+
+        Con la respuesta aceptada, el pie se vuelve morado con "Esta es la
+        respuesta correcta" y el botón pasa a "Próximo paso" — pero llega
+        deshabilitado mientras suena la confirmación. Un solo clic, dado nada
+        más conocerse el veredicto, se pierde: la espera del enunciado
+        siguiente se agotaba a los 90 s con el paso ya resuelto en pantalla.
+        """
+        habilitado = (
             "() => { const e = document.querySelector('[data-qa=SubmitButton]'); "
-            "return e && !/^(skip|omitir)$/i.test((e.textContent || '').trim()); }",
-            "que el botón de enviar deje de decir Omitir",
+            "return e && !e.hasAttribute('disabled') "
+            "&& e.getAttribute('aria-disabled') !== 'true'; }"
         )
-        await submit.click()
-        await self._wait(
+        cambio = (
             "oldPrompt => { const e = document.querySelector('[data-qa=PromptText]'); "
-            "return !e || (e.textContent || '').trim() !== oldPrompt; }",
-            "que el reproductor pase al siguiente paso",
-            previous_prompt,
+            "return !e || (e.textContent || '').trim() !== oldPrompt; }"
         )
+        boton = self.page.get_by_test_id("SubmitButton")
+        for _ in range(self.speech_attempts):
+            try:
+                await self.page.wait_for_function(
+                    habilitado, timeout=self.probe_timeout_ms
+                )
+            except PlaywrightTimeoutError:
+                pass  # se intenta pulsar igual: el atributo puede no estar
+            try:
+                await boton.click(force=True, timeout=self.probe_timeout_ms)
+            except Exception as error:  # noqa: BLE001 - queda otro intento
+                self.logger.debug("  No se pudo pulsar el paso siguiente: %s", error)
+            try:
+                await self.page.wait_for_function(
+                    cambio, arg=previous_prompt, timeout=self.probe_timeout_ms
+                )
+                return True
+            except PlaywrightTimeoutError:
+                continue
+        return False
+
+    async def _speak_until_accepted(self, audio: bytes, step_number: int) -> bool:
+        """Dice la respuesta hasta que el reproductor la dé por buena.
+
+        Mientras el paso está sin resolver el botón de enviar solo tiene dos
+        textos: **"Omitir"** (no ha oído nada) y **"Volver a intentar"** (ha
+        oído y no ha entendido). Dar por buena "cualquier cosa que no sea
+        Omitir" hacía pulsar *Volver a intentar*, que reinicia el paso — el
+        reproductor volvía al principio y la espera del enunciado siguiente se
+        agotaba a los 90 s sin que nada dijera por qué.
+        """
+        for intento in range(1, self.speech_attempts + 1):
+            if intento > 1 and not await self._press_retry():
+                return False
+
+            peticiones = await self.page.evaluate(
+                "() => { window.__rosettaMicPlaybackDone = false; "
+                "return window.__rosettaMicRequests || 0; }"
+            )
+            await self._click_speech_button()
+            # La comprobación de micrófono salta la primera vez que se usa el
+            # micrófono de la actividad: se come esa pulsación y luego se queda
+            # en su diálogo de "todo listo" tapándolo todo. Si ha aparecido, hay
+            # que volver a pulsar cuando se ha ido.
+            if await self._dismiss_microphone_check():
+                await self._click_speech_button()
+            await self._wait_for_microphone(peticiones)
+            await self.page.evaluate(
+                "audio => window.__rosettaFeedMicrophone(audio)",
+                base64.b64encode(audio).decode("ascii"),
+            )
+            await self._wait(
+                "() => window.__rosettaMicPlaybackDone === true",
+                "que termine de sonar el audio inyectado en el micrófono",
+            )
+
+            veredicto = await self._submit_verdict()
+            if veredicto == "aceptada":
+                return True
+            self.logger.info(
+                "  El reconocedor %s en el paso %d (intento %d de %d)",
+                "no oyó nada" if veredicto == "sin respuesta" else "no lo entendió",
+                step_number,
+                intento,
+                self.speech_attempts,
+            )
+
+        self.logger.error(
+            "  El paso %d no logró que se aceptara la respuesta hablada", step_number
+        )
+        await self._dump_screenshot("respuesta_no_aceptada")
+        return False
+
+    async def _submit_verdict(self) -> str:
+        """Qué dice el botón de enviar después de hablar.
+
+        ``sin respuesta`` (sigue en "Omitir"), ``rechazada`` ("Volver a
+        intentar") o ``aceptada`` (cualquier otra cosa, que es lo que deja
+        pasar al enunciado siguiente).
+        """
+        leer = (
+            "() => { const e = document.querySelector('[data-qa=SubmitButton]'); "
+            "return e ? (e.getAttribute('data-qa-button-text') "
+            "|| e.textContent || '').trim() : ''; }"
+        )
+        try:
+            await self.page.wait_for_function(
+                "() => { const e = document.querySelector('[data-qa=SubmitButton]'); "
+                "if (!e) return false; "
+                "const t = (e.getAttribute('data-qa-button-text') "
+                "|| e.textContent || '').trim(); "
+                "return Boolean(t) && !/^(skip|omitir)$/i.test(t); }",
+                timeout=self.probe_timeout_ms,
+            )
+        except PlaywrightTimeoutError:
+            return "sin respuesta"
+
+        texto = await self.page.evaluate(leer)
+        if re.match(r"^\s*(volver a intentar|try again|retry)\s*$", texto, re.I):
+            return "rechazada"
+        return "aceptada"
+
+    async def _press_retry(self) -> bool:
+        """Pulsa *Volver a intentar* para poder hablar otra vez."""
+        try:
+            await self.page.get_by_test_id("SubmitButton").click(
+                force=True, timeout=self.probe_timeout_ms
+            )
+        except Exception as error:  # noqa: BLE001 - sin reintento, se abandona
+            self.logger.info("  No se pudo volver a intentar: %s", error)
+            return False
         return True
 
     async def _wait(self, expression: str, description: str, arg: Any = None) -> None:
@@ -553,11 +742,14 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         pantalla se quedó el reproductor.
         """
         try:
+            # ``arg`` es keyword-only en Playwright: pasarlo por posición es un
+            # TypeError, y aquí salía disfrazado de "Speech browser flow failed"
+            # en mitad de la actividad, no al arrancar.
             if arg is None:
                 await self.page.wait_for_function(expression, timeout=self.timeout_ms)
             else:
                 await self.page.wait_for_function(
-                    expression, arg, timeout=self.timeout_ms
+                    expression, arg=arg, timeout=self.timeout_ms
                 )
         except PlaywrightTimeoutError:
             self.logger.error("  Se agotó la espera de: %s", description)
@@ -739,7 +931,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             return
         self.logger.debug("  Sin grabación propia: la comprobación usará un tono")
 
-    async def _dismiss_microphone_check(self) -> None:
+    async def _dismiss_microphone_check(self) -> bool:
         """Cierra el modal de "Comprobación de micrófono".
 
         Es lo que bloqueaba la actividad entera: una capa por encima de todo
@@ -750,9 +942,39 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         En un contenedor el desplegable sale vacío, así que además se elige el
         primer dispositivo que haya (el falso que inyecta el navegador o el que
         añade el guion del micrófono virtual).
+
+        Tiene dos caras y solo la primera tiene botón: elegir dispositivo y
+        pulsar *Comenzar*, y luego "Comprobando el micrófono...", que escucha
+        sin nada que pulsar. Buscar el botón en la segunda daba "no se encontró
+        el modal" mientras seguía tapando la pantalla, así que lo que se mira
+        es la ventana (``CalibrationWindow``) y lo que se espera es que se vaya.
         """
         etiqueta = re.compile(r"^\s*(comenzar|start|continuar|continue)\s*$", re.I)
         try:
+            estado = await self.page.evaluate(
+                "() => window.__rosettaMicCheckState "
+                "? window.__rosettaMicCheckState() : null"
+            )
+            if estado is not None and not estado.get("presente"):
+                self.logger.debug("  Sin comprobación de micrófono en pantalla")
+                return False
+            # Con el guion sin instalar no se sabe si hay ventana, y decir
+            # que sí haría que se volviera a pulsar el micrófono — que es
+            # apagarlo. Ante la duda, no.
+            hubo_ventana = estado is not None
+            if estado is not None:
+                self.logger.info(
+                    "  Comprobación de micrófono en pantalla (%s): %s",
+                    "escuchando" if estado.get("escuchando") else "eligiendo micrófono",
+                    estado.get("texto"),
+                )
+                await self.page.evaluate(
+                    "() => Boolean(window.__rosettaDismissMicCheck "
+                    "&& window.__rosettaDismissMicCheck())"
+                )
+                if await self._wait_for_mic_check_to_pass():
+                    return True
+
             # El desplegable primero: el botón puede depender de que haya
             # dispositivo elegido. Va en su propio try — si esto falla (el
             # select puede no ser interactuable), lo que no puede es impedir
@@ -782,7 +1004,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             )
             if cerrado:
                 self.logger.info("  Comprobación de micrófono aceptada (vigilante)")
-                return
+                return hubo_ventana
 
             encontrados = []
             for descripcion, candidato in candidatos:
@@ -794,15 +1016,81 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 self.logger.info(
                     "  Comprobación de micrófono aceptada (%s)", descripcion
                 )
-                return
+                return hubo_ventana
             # A nivel debug esto era invisible y el modal se quedaba abierto sin
             # que nada lo dijera: dos corridas perdidas por no ver esta línea.
             self.logger.info(
                 "  No se encontró el botón del modal de micrófono (%s)",
                 ", ".join(encontrados),
             )
+            return hubo_ventana
         except Exception as error:  # noqa: BLE001 - puede no estar
             self.logger.debug("  No se pudo cerrar el modal de micrófono: %s", error)
+        return False
+
+    async def _wait_for_microphone(self, peticiones_antes: int) -> None:
+        """Espera a que el reproductor tenga micrófono para este paso.
+
+        Antes se ponía ``__rosettaMicReady`` a ``false`` y se esperaba a que
+        ``getUserMedia`` lo devolviera a ``true``. Pero el reproductor pide el
+        micrófono **una sola vez** —en la comprobación— y reutiliza ese
+        ``MediaStream`` el resto de la actividad: la segunda petición no llega
+        nunca y la espera moría a los 90 s con "que el reproductor pida el
+        micrófono". Lo que hace falta es que el micrófono virtual esté
+        conectado, no que lo vuelvan a pedir.
+        """
+        # Si ya hay micrófono conectado, esperar los 15 s del sondeo a una
+        # petición que no va a llegar es peor que inútil: el reconocedor
+        # escucha unos segundos y, si para entonces no ha oído nada, da la
+        # respuesta por no entendida. El audio tiene que entrar enseguida.
+        ya_listo = await self.page.evaluate("() => window.__rosettaMicReady === true")
+        espera = 1_500 if ya_listo else self.probe_timeout_ms
+        try:
+            await self.page.wait_for_function(
+                "antes => (window.__rosettaMicRequests || 0) > antes",
+                arg=peticiones_antes,
+                timeout=espera,
+            )
+            return
+        except PlaywrightTimeoutError:
+            pass
+
+        if not ya_listo:
+            raise RuntimeError(
+                "el reproductor no pidió el micrófono y no hay ninguno conectado"
+            )
+        self.logger.debug("  El reproductor reutiliza el micrófono de la comprobación")
+
+    async def _wait_for_mic_check_to_pass(self) -> bool:
+        """Espera a que la ventana de calibración se vaya.
+
+        Mientras está, va en ``position: fixed`` con ``z-index: 7000`` y tapa
+        la actividad entera: seguir adelante solo servía para gastar los cinco
+        intentos de pulsar una respuesta contra el modal y dar por fallado el
+        paso. Si no se va, se dice con qué señal se quedó — el medidor
+        (``encendidas``/``barras``) es lo que distingue "no llega audio" de
+        "llega y no la reconoce".
+        """
+        try:
+            await self.page.wait_for_function(
+                "() => !document.querySelector('[data-qa=\"CalibrationWindow\"]')",
+                timeout=self.timeout_ms,
+            )
+        except PlaywrightTimeoutError:
+            estado = await self.page.evaluate(
+                "() => window.__rosettaMicCheckState()"
+            )
+            self.logger.error(
+                "  La comprobación de micrófono no pasó: medidor %s/%s, "
+                "señal inyectada=%s",
+                estado.get("encendidas"),
+                estado.get("barras"),
+                estado.get("senal"),
+            )
+            await self._dump_screenshot("comprobacion_microfono")
+            return False
+        self.logger.info("  Comprobación de micrófono superada")
+        return True
 
     async def _wait_for_recognizer(self) -> None:
         """Espera a que el reconocedor termine de cargar su modelo.
@@ -857,27 +1145,43 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             ("la secuencia completa de puntero", self._dispatch_pointer_sequence),
             ("la secuencia sobre todo el subárbol", self._dispatch_on_subtree),
         )
+        pintado_antes = await self._choice_paint(choice)
         for descripcion, intento in intentos:
             try:
                 await intento(choice)
             except Exception as error:  # noqa: BLE001 - se prueba el siguiente
                 self.logger.debug("  No se pudo pulsar %s: %s", descripcion, error)
                 continue
-            if await self._choice_registered():
+            if await self._choice_registered(choice, pintado_antes):
                 self.logger.info("  Respuesta marcada pulsando %s", descripcion)
                 return True
         return False
 
-    async def _choice_registered(self) -> bool:
+    async def _choice_paint(self, choice: Any) -> str:
+        """Cómo está pintado el radio de esta respuesta.
+
+        No hay ``aria-checked`` ni ``input[type=radio]``: la ficha es un ``div``
+        con un SVG de dos círculos, y lo único que cambia al elegir es el
+        relleno del interior (sin marcar: ``#ffffff``).
+        """
+        try:
+            return await choice.evaluate(
+                "el => [...el.querySelectorAll('circle')]"
+                ".map(c => (c.getAttribute('fill') || '')).join('|')"
+            )
+        except Exception:  # noqa: BLE001 - es una comprobación, no puede hundir nada
+            return ""
+
+    async def _choice_registered(self, choice: Any, pintado_antes: str) -> bool:
         """¿Se ha enterado el reproductor de que hemos elegido?
 
-        Antes esto preguntaba solo si se había habilitado el micrófono, y eso
-        da por fallida una selección que sí ocurrió cuando el micrófono depende
-        de otra cosa. Las tres señales que sirven:
+        Ya **no** vale que el micrófono esté habilitado: desde que la
+        comprobación de micrófono se pasa, lo está siempre, así que ese criterio
+        daba por buena la primera forma de pulsar y no se probaba ninguna otra —
+        con la actividad entera sin una sola respuesta marcada.
 
-        - el botón de enviar deja de decir "Omitir" (con nada elegido dice eso),
-        - hay algo marcado (``aria-checked`` o un radio real),
-        - el micrófono se habilita.
+        Lo que sirve es que el botón de enviar deje de decir "Omitir", o que el
+        radio de *esta* respuesta cambie de aspecto.
         """
         try:
             await self.page.wait_for_function(
@@ -891,16 +1195,13 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                     const marcado = document.querySelector(
                         '[aria-checked=true], input[type=radio]:checked'
                     );
-                    const mic = document.querySelector('[data-qa=SpeechButton]');
-                    const micListo = mic && !mic.hasAttribute('disabled')
-                        && mic.getAttribute('aria-disabled') !== 'true';
-                    return Boolean(yaNoOmite || marcado || micListo);
+                    return Boolean(yaNoOmite || marcado);
                 }""",
-                timeout=5_000,
+                timeout=2_000,
             )
             return True
         except PlaywrightTimeoutError:
-            return False
+            return await self._choice_paint(choice) != pintado_antes
 
     async def _click_choice_text(self, choice: Any) -> None:
         texto = choice.get_by_test_id("ChoiceText")
