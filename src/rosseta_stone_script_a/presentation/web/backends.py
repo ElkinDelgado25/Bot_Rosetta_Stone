@@ -62,6 +62,33 @@ def _run_config(
     }
 
 
+# Ajustes del motor que el worker debe heredar del servidor. Sin esto, poner
+# FLUENCY_SPEECH_TRACE=1 en el compose no hacía nada: el contenedor de la
+# corrida arranca con un entorno fijo y no ve el del servidor que lo lanzó.
+WORKER_ENV_PASSTHROUGH = (
+    "FLUENCY_SPEECH_BROWSER",
+    "FLUENCY_SPEECH_TRACE",
+    "FLUENCY_BROWSER_EXTRA_TYPES",
+    "FLUENCY_TOTAL_COURSE_HOURS",
+    "FLUENCY_SEND_USAGE_OVERHEAD",
+    "FLUENCY_DRY_RUN",
+    "STORIES_TARGET_HOURS",
+    "STORIES_CHUNK_MIN_SEC",
+    "STORIES_CHUNK_MAX_SEC",
+    "STORIES_LANGUAGE",
+    "LOG_LEVEL",
+)
+
+
+def worker_passthrough_env() -> dict[str, str]:
+    """Las variables del servidor que el worker necesita, si están puestas."""
+    return {
+        name: os.environ[name]
+        for name in WORKER_ENV_PASSTHROUGH
+        if os.environ.get(name, "").strip()
+    }
+
+
 def fluency_limit_env(max_lessons: int | None) -> str:
     """Traduce el límite del perfil al valor que espera el motor.
 
@@ -114,6 +141,7 @@ class InProcessBackend(LoggingMixin):
                 headless=True,
                 verify_only=mode == "verify",
                 pending_only=mode == "pending",
+                stories_only=mode == "stories",
             )
         )
         self._tasks[profile.id] = task
@@ -228,6 +256,7 @@ class DockerBackend(LoggingMixin):
                     "FLUENCY_MAX_LESSONS": fluency_limit_env(
                         profile.fluency_max_lessons
                     ),
+                    **worker_passthrough_env(),
                 },
                 volumes={host_data: {"bind": CONTAINER_DATA_DIR, "mode": "rw"}},
                 shm_size="512m",

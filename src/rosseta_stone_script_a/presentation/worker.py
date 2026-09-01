@@ -75,6 +75,7 @@ async def _run(config: dict[str, Any]) -> dict[str, Any]:
         headless=True,
         verify_only=config.get("mode") == "verify",
         pending_only=config.get("mode") == "pending",
+        stories_only=config.get("mode") == "stories",
     )
 
 

@@ -2,6 +2,7 @@ from rosseta_stone_script_a.application.orchestrators.complete_exam_orchestrator
     CompleteExamOrchestrator,
 )
 from rosseta_stone_script_a.application.orchestrators.complete_fluency_orchestrator import (
+    BROWSER_COMPLETED_TYPES,
     CompleteFluencyOrchestrator,
 )
 from rosseta_stone_script_a.application.orchestrators.complete_foundations_orchestrator import (
@@ -19,6 +20,9 @@ from rosseta_stone_script_a.application.orchestrators.foundations_pending_orches
 from rosseta_stone_script_a.application.orchestrators.open_fundations import (
     OpenFundations,
 )
+from rosseta_stone_script_a.application.orchestrators.stories_orchestrator import (
+    StoriesOrchestrator,
+)
 from rosseta_stone_script_a.application.ports.web import IWebSession
 from rosseta_stone_script_a.application.services.exam_solver import ExamSolver
 from rosseta_stone_script_a.application.services.fluency_duration_calculator import (
@@ -27,8 +31,14 @@ from rosseta_stone_script_a.application.services.fluency_duration_calculator imp
 from rosseta_stone_script_a.application.services.fluency_session_capturer import (
     FluencySessionCapturer,
 )
+from rosseta_stone_script_a.application.services.learner_auth_capturer import (
+    LearnerAuthCapturer,
+)
 from rosseta_stone_script_a.application.services.rosetta_session_capturer import (
     RosettaSessionCapturer,
+)
+from rosseta_stone_script_a.application.services.stories_usage_planner import (
+    StoriesUsagePlanner,
 )
 from rosseta_stone_script_a.application.use_cases.complete_exam import (
     CompleteExamUseCase,
@@ -48,11 +58,20 @@ from rosseta_stone_script_a.infrastructure.adapters.exam_api.playwright_exam_api
 from rosseta_stone_script_a.infrastructure.adapters.fluency_api.playwright_fluency_api import (
     PlaywrightFluencyApiAdapter,
 )
+from rosseta_stone_script_a.infrastructure.adapters.learner_dashboard.playwright_learner_dashboard import (
+    PlaywrightLearnerDashboardAdapter,
+)
+from rosseta_stone_script_a.infrastructure.adapters.stories_api.playwright_stories_api import (
+    PlaywrightStoriesApiAdapter,
+)
 from rosseta_stone_script_a.infrastructure.adapters.foundations_api.playwright_foundations_api import (
     PlaywrightFoundationsApiAdapter,
 )
 from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.dashboard_page import (
     DashboardPage,
+)
+from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.stories_page import (
+    StoriesPage,
 )
 from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
@@ -116,6 +135,7 @@ class DependencyFactory:
         # Create services
         session_capturer = RosettaSessionCapturer()
         fluency_capturer = FluencySessionCapturer()
+        learner_auth_capturer = LearnerAuthCapturer()
 
         # Create use cases
         login_use_case = LoginRossetaUseCase(
@@ -132,7 +152,47 @@ class DependencyFactory:
             web_session=self.web_session,
             session_capturer=session_capturer,
             fluency_capturer=fluency_capturer,
+            learner_auth_capturer=learner_auth_capturer,
+            learner_dashboard=self._learner_dashboard_adapter(),
         )
+
+    def create_stories_orchestrator(self) -> StoriesOrchestrator:
+        """Orquestador de Stories: entra en una historia y reporta horas.
+
+        Env:
+        - ``STORIES_TARGET_HOURS`` lo consume quien llama (es el presupuesto).
+        - ``STORIES_CHUNK_MIN_SEC`` / ``STORIES_CHUNK_MAX_SEC``: calibre de los
+          tramos reportados, 300-900 s por defecto (el del cliente real).
+        - ``STORIES_REPORT_DELAY_SEC``: espera entre envíos, 0 = seguidos.
+        - ``STORIES_LANGUAGE``: idioma que se declara a la API.
+        """
+        import os
+
+        page = getattr(self.web_session, "_page", None)
+        if not page:
+            raise RuntimeError("Web session not initialized correctly")
+
+        planner = StoriesUsagePlanner(
+            chunk_min_sec=int(os.getenv("STORIES_CHUNK_MIN_SEC", "300")),
+            chunk_max_sec=int(os.getenv("STORIES_CHUNK_MAX_SEC", "900")),
+        )
+        return StoriesOrchestrator(
+            stories_page=StoriesPage(web_session=self.web_session),
+            stories_api=PlaywrightStoriesApiAdapter(page.request),
+            planner=planner,
+            network_monitor=getattr(self.web_session, "network_monitor", None),
+            language=os.getenv("STORIES_LANGUAGE", "ENG"),
+            delay_seconds=float(os.getenv("STORIES_REPORT_DELAY_SEC", "0")),
+        )
+
+    def _learner_dashboard_adapter(self) -> PlaywrightLearnerDashboardAdapter | None:
+        """El lector de horas, o ``None`` si aún no hay página que preste su
+        contexto de peticiones. A diferencia de los adaptadores de escritura,
+        este no puede reventar por faltar: solo comprueba."""
+        page = getattr(self.web_session, "_page", None)
+        if not page:
+            return None
+        return PlaywrightLearnerDashboardAdapter(page.request)
 
     def create_fluency_orchestrator(self) -> FluencyOrchestrator:
         """Create the read-only Fluency Builder orchestrator with its API adapter."""
@@ -207,10 +267,26 @@ class DependencyFactory:
             delay_ms=delay_ms,
             duration_calculator=FluencyDurationCalculator(total_course_hours=total_hours),
             send_usage_overhead=send_usage_overhead,
+            browser_completed_types=self._browser_completed_types(),
         )
+
+    def _browser_completed_types(self) -> tuple:
+        """Tipos que se completan por navegador, con extras opcionales.
+
+        ``FLUENCY_BROWSER_EXTRA_TYPES`` existe para probar un tipo nuevo sin
+        recompilar: los que se metieron a ojo costaron 90 s por actividad y no
+        completaron nada, así que la lista por defecto solo lleva lo confirmado.
+        """
+        import os
+
+        extra = os.getenv("FLUENCY_BROWSER_EXTRA_TYPES", "")
+        extras = tuple(t.strip() for t in extra.split(",") if t.strip())
+        return BROWSER_COMPLETED_TYPES + extras
 
     def _fluency_speech_adapter(self) -> PlaywrightFluencySpeechPage | None:
         import os
+
+        from rosseta_stone_script_a.infrastructure.core import get_base_dir
 
         enabled = os.getenv("FLUENCY_SPEECH_BROWSER", "1").strip().lower()
         if enabled in ("0", "false", "no", "off"):
@@ -218,7 +294,15 @@ class DependencyFactory:
         page = getattr(self.web_session, "_page", None)
         if not page:
             raise RuntimeError("Web session not initialized correctly")
-        return PlaywrightFluencySpeechPage(page)
+
+        # FLUENCY_SPEECH_TRACE=1 graba las actividades que fallan para poder
+        # verlas después con `playwright show-trace`. Apagado por defecto: una
+        # traza por actividad ocupa megas.
+        trace = os.getenv("FLUENCY_SPEECH_TRACE", "").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        trace_dir = (get_base_dir() / "logs" / "diagnostics") if trace else None
+        return PlaywrightFluencySpeechPage(page, trace_dir=trace_dir)
 
     def _fluency_api_adapter(self) -> PlaywrightFluencyApiAdapter:
         page = getattr(self.web_session, "_page", None)

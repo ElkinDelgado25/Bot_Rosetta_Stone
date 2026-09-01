@@ -474,3 +474,90 @@ def test_redaction_strips_tokens_from_log_lines():
     assert "<jwt-redacted>" in _redact(f"authorization: {jwt}")
     assert "abc123def456" not in _redact('session_token: "abc123def456"')
     assert "hunter2" not in _redact("password=hunter2")
+
+
+def test_a_stories_run_that_credited_nothing_is_not_a_success(tmp_path, backend):
+    """Un informe fallido no puede terminar en verde.
+
+    Es la misma trampa que ya costó una vez con la captura de sesión: salir
+    con éxito habiendo hecho nada deja al usuario creyendo que sí.
+    """
+    store, manager = _manager(tmp_path, backend)
+    profile = store.create(name="u", email="u@e.com", password="x")
+    backend.outcome = RunOutcome(
+        ok=True,
+        captured={
+            "stories_report": {
+                "hours_credited": 0.0,
+                "chunks_sent": 0,
+                "story": None,
+                "failed": True,
+                "error": "No se pudo abrir ninguna historia",
+            }
+        },
+    )
+
+    async def scenario():
+        manager.enqueue(profile.id, "x", mode="stories")
+        await _drain(manager, profile.id)()
+
+    asyncio.run(scenario())
+
+    record = manager.record_for(profile.id)
+    assert record.status is RunStatus.ERROR
+    assert "No se pudo abrir ninguna historia" in record.error
+    # El informe sobrevive al error: dice cuánto llegó a entrar.
+    assert record.stories_report["chunks_sent"] == 0
+
+
+def test_a_stories_run_that_credited_hours_succeeds(tmp_path, backend):
+    store, manager = _manager(tmp_path, backend)
+    profile = store.create(name="u", email="u@e.com", password="x")
+    backend.outcome = RunOutcome(
+        ok=True,
+        captured={
+            "stories_report": {
+                "hours_credited": 0.5,
+                "chunks_sent": 3,
+                "story": "Cats",
+                "failed": False,
+                "error": None,
+            }
+        },
+    )
+
+    async def scenario():
+        manager.enqueue(profile.id, "x", mode="stories")
+        await _drain(manager, profile.id)()
+
+    asyncio.run(scenario())
+
+    record = manager.record_for(profile.id)
+    assert record.status is RunStatus.SUCCESS
+    assert record.stories_report["hours_credited"] == 0.5
+
+
+def test_the_worker_inherits_the_engine_knobs(monkeypatch):
+    """Un ajuste puesto en el compose tiene que llegar al contenedor de la corrida.
+
+    Sin esto, FLUENCY_SPEECH_TRACE=1 en el servidor no hacía nada: el worker
+    arranca con un entorno fijo y no ve el de quien lo lanzó.
+    """
+    from rosseta_stone_script_a.presentation.web.backends import worker_passthrough_env
+
+    monkeypatch.setenv("FLUENCY_SPEECH_TRACE", "1")
+    monkeypatch.setenv("FLUENCY_BROWSER_EXTRA_TYPES", "PronunciationPhoneme")
+    monkeypatch.delenv("FLUENCY_DRY_RUN", raising=False)
+
+    passed = worker_passthrough_env()
+    assert passed["FLUENCY_SPEECH_TRACE"] == "1"
+    assert passed["FLUENCY_BROWSER_EXTRA_TYPES"] == "PronunciationPhoneme"
+    # Lo que no está puesto no viaja: el worker mantiene sus defaults.
+    assert "FLUENCY_DRY_RUN" not in passed
+
+
+def test_an_empty_knob_is_not_passed_through(monkeypatch):
+    from rosseta_stone_script_a.presentation.web.backends import worker_passthrough_env
+
+    monkeypatch.setenv("FLUENCY_SPEECH_TRACE", "   ")
+    assert "FLUENCY_SPEECH_TRACE" not in worker_passthrough_env()

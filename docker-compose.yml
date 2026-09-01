@@ -16,6 +16,11 @@ services:
       # el puerto. Defínelo en un archivo .env junto a este compose.
       ROSETTA_WEB_TOKEN: ${ROSETTA_WEB_TOKEN:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Ajustes del motor que se pasan tal cual a cada worker (ver
+      # WORKER_ENV_PASSTHROUGH en backends.py).
+      FLUENCY_SPEECH_BROWSER: ${FLUENCY_SPEECH_BROWSER:-}
+      FLUENCY_SPEECH_TRACE: ${FLUENCY_SPEECH_TRACE:-}
+      FLUENCY_BROWSER_EXTRA_TYPES: ${FLUENCY_BROWSER_EXTRA_TYPES:-}
       # Imagen que usan los workers: la misma, con otro comando.
       ROSETTA_WORKER_IMAGE: rosseta-script-a:latest
       # Ruta de ./data EN EL HOST. El worker monta el mismo directorio, y desde

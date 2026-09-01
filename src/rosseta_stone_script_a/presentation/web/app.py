@@ -179,6 +179,26 @@ def create_app(
             raise HTTPException(status_code=409, detail="Este perfil ya tiene una corrida activa")
         return _profile_view(profile)
 
+    @app.post("/api/profiles/{profile_id}/stories", dependencies=guard)
+    async def report_stories(
+        profile_id: str, payload: RunIn | None = None
+    ) -> dict[str, Any]:
+        """Acredita horas de estudio entrando en una historia de Stories."""
+        profile = _get_or_404(profile_id)
+        password = (payload.password if payload else None) or profile.password
+        if not password:
+            raise HTTPException(
+                status_code=400,
+                detail="Este perfil no guarda contrasena: enviala con la peticion",
+            )
+        try:
+            manager.enqueue(profile_id, password, mode="stories")
+        except RunAlreadyActive:
+            raise HTTPException(
+                status_code=409, detail="Este perfil ya tiene una corrida activa"
+            )
+        return _profile_view(profile)
+
     @app.post("/api/profiles/{profile_id}/stop", dependencies=guard)
     async def stop_run(profile_id: str) -> dict[str, Any]:
         _get_or_404(profile_id)

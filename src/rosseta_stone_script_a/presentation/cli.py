@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 from typing import Optional, Union
 
@@ -37,6 +38,7 @@ class RosettaCLI(LoggingMixin):
         headless: bool | None = None,
         verify_only: bool = False,
         pending_only: bool = False,
+        stories_only: bool = False,
     ) -> dict:
         """
         Run a hierarchical learning session following Course → Lesson → Activity flow.
@@ -102,6 +104,34 @@ class RosettaCLI(LoggingMixin):
                             "Verificación: producto detectado = %s. No se envía nada.",
                             product,
                         )
+                        return captured_data
+
+                    if stories_only:
+                        # Stories no depende del producto detectado: es otra
+                        # superficie de la misma cuenta y acredita horas por su
+                        # propia API, no por el tracking de paths.
+                        if product == RosettaProduct.FLUENCY_BUILDER.value:
+                            self.logger.warning(
+                                "Esta cuenta es Fluency Builder. /stories es la "
+                                "superficie de Totale (Foundations): si el listado "
+                                "no aparece, es que a esta cuenta no le corresponde."
+                            )
+                        target_hours = float(
+                            os.getenv("STORIES_TARGET_HOURS", "1")
+                        )
+                        stories = factory.create_stories_orchestrator()
+                        result = await stories.execute(target_hours)
+                        if result.failed:
+                            self.logger.error(
+                                "Stories no acreditó horas: %s", result.error
+                            )
+                        captured_data["stories_report"] = {
+                            "hours_credited": result.hours_credited,
+                            "chunks_sent": result.chunks_sent,
+                            "story": result.story,
+                            "failed": result.failed,
+                            "error": result.error,
+                        }
                         return captured_data
 
                     if pending_only:

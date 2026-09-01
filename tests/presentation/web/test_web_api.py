@@ -131,6 +131,25 @@ def test_pending_endpoint_launches_a_read_only_reconciliation(client):
     assert run["status"] in ("queued", "running")
 
 
+def test_stories_endpoint_launches_an_hour_report(client):
+    created = _create(client)
+    response = client.post(f"/api/profiles/{created['id']}/stories", json={})
+
+    assert response.status_code == 200
+    run = response.json()["run"]
+    assert run["mode"] == "stories"
+    assert run["status"] in ("queued", "running")
+
+
+def test_stories_without_a_password_is_rejected(client):
+    created = _create(client, password=None)
+    assert client.post(f"/api/profiles/{created['id']}/stories", json={}).status_code == 400
+
+
+def test_stories_on_an_unknown_profile_is_404(client):
+    assert client.post("/api/profiles/nope/stories", json={}).status_code == 404
+
+
 def test_a_new_profile_starts_unverified(client):
     created = _create(client)
     assert created["product"] is None

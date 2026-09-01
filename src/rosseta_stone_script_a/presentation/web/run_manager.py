@@ -107,6 +107,7 @@ class RunRecord:
     # "run" sends progress; "verify" only logs in and reports what it found.
     mode: str = "run"
     pending_report: dict[str, Any] | None = None
+    stories_report: dict[str, Any] | None = None
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -122,6 +123,7 @@ class RunRecord:
             "paths_total": self.paths_total,
             "lessons": [lesson.as_dict() for lesson in self.lessons.values()],
             "pending_report": self.pending_report,
+            "stories_report": self.stories_report,
         }
 
     def reset_for_new_run(self) -> None:
@@ -134,6 +136,7 @@ class RunRecord:
         self.error = None
         self.finished_at = None
         self.pending_report = None
+        self.stories_report = None
 
 
 class _RunLogHandler(logging.Handler):
@@ -313,6 +316,19 @@ class RunManager:
         if isinstance(report, dict):
             with self._lock:
                 self._records[profile_id].pending_report = report
+        stories = (outcome.captured or {}).get("stories_report")
+        if isinstance(stories, dict):
+            with self._lock:
+                self._records[profile_id].stories_report = stories
+            # Una corrida que no acreditó ni una hora no es un éxito. El
+            # informe se conserva: dice cuánto llegó a entrar antes de fallar.
+            if stories.get("failed"):
+                self._finish(
+                    profile_id,
+                    RunStatus.ERROR,
+                    stories.get("error") or "Stories no acreditó horas",
+                )
+                return
         self._finish(profile_id, RunStatus.SUCCESS, None)
 
     def _absorb_captured(self, profile: Profile, captured: dict[str, Any]) -> None:
