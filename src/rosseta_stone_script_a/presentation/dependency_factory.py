@@ -101,12 +101,16 @@ class DependencyFactory:
         self.max_paths_per_day = max_paths_per_day
         self.state_dir = state_dir
 
+    def create_auth_page(self) -> LoginPage:
+        """La página de login. Se usa para entrar y, al final, para salir."""
+        return LoginPage(
+            web_session=self.web_session, rosetta_login_url=self.rosseta_login_url
+        )
+
     def create_open_fundations(self) -> OpenFundations:
         """Create OpenFoundations orchestrator with dependencies."""
         # Create pages
-        login_page = LoginPage(
-            web_session=self.web_session, rosetta_login_url=self.rosseta_login_url
-        )
+        login_page = self.create_auth_page()
         dashboard_page = DashboardPage(web_session=self.web_session)
 
         # Create services

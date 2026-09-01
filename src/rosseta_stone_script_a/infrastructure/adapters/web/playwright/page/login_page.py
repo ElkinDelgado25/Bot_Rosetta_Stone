@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urljoin
 
 from rosseta_stone_script_a.application.ports.web import AuthPort, IWebSession, Selector
 from rosseta_stone_script_a.domain.entities.credentials import Credentials
@@ -82,6 +83,22 @@ class LoginPage(AuthPort):
         )
 
         self.logger.info("Login process completed successfully")
+
+    async def logout(self) -> None:
+        """Cerrar la sesión en el servidor de Rosetta, no solo el navegador.
+
+        Rosetta autentica con Keycloak: la sesión vive del lado del servidor y
+        sigue viva aunque el navegador muera. Por eso la siguiente vez que el
+        usuario entra le avisan que su cuenta está abierta en otro navegador.
+
+        La UI real lo resuelve con una navegación simple a ``/logout``: así
+        quedó grabado en el HAR del logout manual (login -> learn -> login ->
+        /logout), sin POST ni cabeceras propias, solo las cookies de sesión.
+        """
+        logout_url = urljoin(self.rosetta_login_url, "/logout")
+        self.logger.info(f"Cerrando sesión en {logout_url}")
+        await self.web_session.navigator.go_to(logout_url, wait_for_load=True)
+        self.logger.info("Sesión cerrada en el servidor")
 
     async def _handle_institutional_account_selection(
         self, creds: "Credentials"
