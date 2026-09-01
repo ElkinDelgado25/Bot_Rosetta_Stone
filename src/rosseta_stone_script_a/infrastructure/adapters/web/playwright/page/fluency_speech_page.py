@@ -513,10 +513,10 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 if not await self._complete_visible_step(step_number):
                     return False
 
-                if step_number < expected_steps:
-                    await self.page.get_by_test_id("SpeechButton").wait_for(
-                        state="visible", timeout=self.timeout_ms
-                    )
+                if step_number < expected_steps and not await self._another_step_starts(
+                    step_number
+                ):
+                    return True
 
             return True
         except PlaywrightTimeoutError as exc:
@@ -692,6 +692,26 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         )
         await self._dump_screenshot("respuesta_no_aceptada")
         return False
+
+    async def _another_step_starts(self, step_number: int) -> bool:
+        """¿Queda otro paso, o la conversación se acabó antes de la cuenta?
+
+        ``expected_steps`` viene de la API y **no coincide con lo que pinta el
+        reproductor**: una actividad que declaraba 13 tenía 10 enunciados. Al
+        acabar el décimo se esperaban 90 s a un micrófono que ya no vuelve y la
+        conversación, terminada y al 100%, se daba por fallida.
+        """
+        try:
+            await self.page.get_by_test_id("SpeechButton").wait_for(
+                state="visible", timeout=self.probe_timeout_ms
+            )
+            return True
+        except PlaywrightTimeoutError:
+            self.logger.info(
+                "  La conversación se acabó en el paso %d (la API decía más)",
+                step_number,
+            )
+            return False
 
     async def _wait_until_recording(self) -> None:
         """Espera a que el botón entre en modo grabación antes de hablar.

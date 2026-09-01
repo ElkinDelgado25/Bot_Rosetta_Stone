@@ -412,11 +412,25 @@ vieron en corridas reales, y cada una escondía a la siguiente:
    está deshabilitado mientras suena la confirmación, así que el primer clic se
    pierde. Se pulsa hasta que el enunciado cambie.
 
-Resultado medido: **10 pasos de 10** en una actividad
-``DialogueExpressionWithReco`` real, y ``getProgress`` devolviendo
-``percentComplete=1``. Un detalle constante: el **primer intento de habla casi
-siempre se rechaza y el segundo entra**; por eso los reintentos no son un
-adorno.
+5. **``expected_steps`` no es lo que pinta el reproductor.** Una actividad que
+   la API declaraba de 13 tenía 10 enunciados. Al acabar el décimo se esperaban
+   90 s a un micrófono que ya no vuelve y la conversación —terminada, y al 100%
+   según ``getProgress``— se daba por fallida y no se persistía. Que el
+   micrófono no reaparezca es el final, no un error: se comprueba con el sondeo
+   corto y se sale del bucle.
+
+Resultado medido: **10 pasos de 10** en dos actividades
+``DialogueExpressionWithReco`` reales, y ``getProgress`` devolviendo
+``percentComplete=1`` en ambas. Un detalle constante: el **primer intento de
+habla casi siempre se rechaza y el segundo entra**; por eso los reintentos no
+son un adorno. Se probó a esperar a que el botón entrara en modo grabación
+antes de inyectar, por si el rechazo era de tiempo: **no lo era** — sigue
+pasando igual con la espera puesta.
+
+Las tres respuestas son la **misma frase dicha de tres formas** ("I began
+Athena Cell Phones in 1990" / "Our company's history began in 1990" / "Athena
+Cell Phones began in 1990"), así que al aceptarse una se iluminan las tres. No
+hay una correcta y dos incorrectas, y por eso da igual cuál se diga.
 
 **El audio de referencia se saca del buffer que suena, no de la URL.** La media
 va firmada (500 al descargarla, incluso desde dentro de la página) y se descifra
