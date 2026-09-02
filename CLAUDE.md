@@ -29,7 +29,7 @@ Instrucciones y contexto para trabajar en este repositorio. Léeme primero.
 - **FastAPI** — servidor web (opcional, solo si usas interfaz web)
 - **Playwright** — automatización del navegador (Chromium/Chrome/Edge)
 - **Docker** — aislamiento de corridas (opcional, recomendado para la web)
-- **pytest** — tests (292 tests)
+- **pytest** — tests (341 tests)
 
 ---
 
@@ -63,7 +63,7 @@ uv run python -m rosseta_stone_script_a
 
 Lee del `.env`. Primera ejecución lo crea interactivamente.
 
-### Tests — 292 tests, sin navegador ni contenedores
+### Tests — 341 tests, sin navegador ni contenedores
 
 ```bash
 uv run pytest -q
@@ -118,7 +118,7 @@ docs/
 ├── ARCHITECTURE.md       Modularización y capas
 └── FLUENCY_BUILDER.md    Detalles del producto Fluency
 
-tests/                    292 tests, por capas
+tests/                    341 tests, por capas
 ```
 
 ---
@@ -191,7 +191,7 @@ Van en `.env` o en `environment:` del compose.
 | `FLUENCY_MAX_LESSONS` | 1 (CLI) / all (web) | Lecciones por corrida |
 | `FLUENCY_DRY_RUN` | `false` | `true` para construir sin enviar |
 | `FLUENCY_TOTAL_COURSE_HOURS` | `70` | Horas de estudio fabricadas, repartidas entre lecciones/steps de la corrida |
-| `FLUENCY_SEND_USAGE_OVERHEAD` | `false` | `true` para probar la mutación `AddUsageOverhead` (inferida, sin verificar) |
+| `FLUENCY_SEND_USAGE_OVERHEAD` | `false` | `true` para enviar `AddUsageOverhead` (esquema ya capturado; falta confirmar que el servidor lo acepta) |
 | `FLUENCY_SPEECH_BROWSER` | `1` | `0` apaga la ruta de voz por navegador |
 | `FLUENCY_SPEECH_TRACE` | `0` | `1` graba una traza de Playwright por actividad de voz fallida |
 | `FLUENCY_BROWSER_EXTRA_TYPES` | vacío | Tipos extra a completar por navegador, separados por coma |
@@ -347,7 +347,7 @@ Un JSON tocado a mano en Windows lleva BOM. `json.load` revienta. Se lee con `en
 | Código 3 al ejecutar | Sesión incompleta (login fallido) | Verifica en la UI: ¿dónde se corta? |
 | "0 completadas" tras ejecutar | Sesión no se capturó | Mira el log en vivo: ¿envió algo? |
 | Corrida detiene en una lección | `fluency_max_lessons` puesto | Saca el límite del perfil |
-| Lección en ~95% | Tiene actividades de voz | Está documentado: no se puede completar por API |
+| Lección en ~95% | Le quedan conversaciones (`DialogueExpression*`) | Son las únicas `ordering: tree`: no se acreditan por API, van por navegador. Ver `docs/FLUENCY_BUILDER.md` |
 | "el paso N no llegó a seleccionar ninguna respuesta" | El modal de micrófono está encima (`z-index: 7000`) | No es un problema de clics: mira el medidor en el log. Ver `docs/FLUENCY_BUILDER.md` |
 | Chips vuelven a `idle` tras reiniciar | Último estado vive en memoria | Sí, el progreso persiste en disco |
 | `Could not launch a browser` | No hay Chrome/Edge en el PATH | `uv run playwright install chromium` |
@@ -361,7 +361,7 @@ Un JSON tocado a mano en Windows lleva BOM. `json.load` revienta. Se lee con `en
 uv run pytest -q
 ```
 
-292 tests. Ninguno abre navegador ni lanza contenedores:
+341 tests. Ninguno abre navegador ni lanza contenedores:
 - `FakeBackend` inyectado en tests de web
 - Tests de adapters mockean APIs
 - Todo se ejecuta en ~5 segundos
@@ -418,14 +418,23 @@ uv run pytest -q -s [path/test_file.py]   # sin capturar print()
   si no hay credenciales o el panel falla, la corrida sigue igual.
   **Confirmado en una cuenta real** (31-08-2026): la respuesta del login trae
   `auth_data`, el capturador lo pesca y el panel devolvió 77,313 h.
-- ~~AddUsageOverhead~~ — implementada como mutación **inferida y sin
-  verificar** (`FluencyApiPort.add_usage_overhead` /
-  `PlaywrightFluencyApiAdapter`), apagada por default
-  (`FLUENCY_SEND_USAGE_OVERHEAD=0`). El envío de lecciones completadas al
-  tracking (`AddProgress`) y la parte de audio (`CompleteFluencyOrchestrator`
-  + `PlaywrightFluencySpeechPage`) ya estaban implementados antes de esta
-  nota. **Pendiente real:** conseguir una captura de red con el query/
-  variables reales de `AddUsageOverhead` para reemplazar la versión inferida.
+- ~~AddUsageOverhead~~ — **esquema capturado** (02-09-2026) del tráfico real
+  que guardan las trazas de actividades de voz fallidas: la mutación toma
+  `$messages` (no `$overheads`), no lleva `userId` y devuelve un escalar, y el
+  mensaje es `{id, userAgent, learningContext, durationMs, endTimestamp}`. La
+  versión inferida era inválida contra el esquema por los tres motivos a la
+  vez. Sigue apagada por default (`FLUENCY_SEND_USAGE_OVERHEAD=0`).
+  **Pendiente real:** encenderla una vez y confirmar que el servidor la acepta.
+
+- **Conversaciones `DialogueExpression*`** — las 46 actividades
+  `ordering: "tree"` del catálogo (27 `WithReco` + 19 `WithoutReco`) son las
+  únicas que la API deja en `percentComplete=0` hagas lo que hagas: lo que el
+  servidor no acredita fabricado es el árbol, no la voz. Las dos van ahora por
+  navegador. `WithoutReco` estuvo apuntada como "hueco imposible" por una
+  conclusión mal sacada — se enrutó a la ruta de voz sin adaptarla, esperó un
+  micrófono que esos pasos (`inputType: select`) no tienen y se leyó el timeout
+  como imposibilidad. **Pendiente real:** una corrida contra la cuenta viva; el
+  código está sin ejercitar desde el 01-09 11:02.
 - ~~Ajuste de las horas~~ — implementado (`FluencyDurationCalculator`):
   presupuesto total de horas de estudio (`FLUENCY_TOTAL_COURSE_HOURS`,
   default 70) repartido con jitter entre las lecciones y steps de la

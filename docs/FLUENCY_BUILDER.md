@@ -240,27 +240,47 @@ Notas para la implementación futura:
 - La respuesta de la mutación devuelve la lista de `ProgressCourse` con sus ids;
   no hay que interpretarla, solo confirmar 200.
 
-### `AddUsageOverhead` (inferida, sin verificar)
+### `AddUsageOverhead` (capturada del reproductor, 01-09-2026)
 
-La captura solo registró que existen 59 llamadas `AddUsageOverhead` junto a las
-106 `AddProgress` de esa corrida — **nunca se capturó su query, variables ni
-respuesta reales**. La completación de la lección (0%→100%, confirmada en
-corrida real) funciona solo con `AddProgress`; `AddUsageOverhead` parece
-telemetría complementaria de tiempo de uso, no un requisito de completación.
+Estuvo mucho tiempo inferida por analogía con `AddProgress`. Ya no: las trazas
+de Playwright que deja una actividad de voz fallida guardan el tráfico real, y
+dentro había dos llamadas `AddUsageOverhead` con su query y sus variables.
 
-Implementación actual: `FluencyApiPort.add_usage_overhead` /
-`PlaywrightFluencyApiAdapter.add_usage_overhead` envían una mutación inferida
-por analogía con `AddProgress` (mismo patrón de `mutation X($userId: String,
-$campo: [Tipo!]!)`, con los campos de identidad que `ProgressMessage` ya usa
-más el `durationMs` total de la actividad). Es **best-effort**:
+```graphql
+mutation AddUsageOverhead($messages: [UsageOverheadMessage!]!) {
+  usageOverhead(messages: $messages)
+}
+```
 
-- Apagada por default (`FLUENCY_SEND_USAGE_OVERHEAD=0`). Solo se activa a
-  propósito para probarla contra la cuenta real.
-- Un error de schema GraphQL (mutación/campo inexistente) se trata como
-  fallo no fatal: se loguea a nivel `debug` y no interrumpe ni revierte el
-  `AddProgress` ya exitoso de esa actividad.
-- Corregir el query/variables reales en cuanto exista una captura de red que
-  la muestre — hasta entonces, tratarla como no verificada.
+```json
+{"messages": [{
+  "id": "7985d048-0243-4a35-a8c7-09f966930f3e",
+  "userAgent": "Mozilla/5.0 (...) Chrome/140.0.0.0 Safari/537.36",
+  "learningContext": "aefc3bf647e0c78b1f6ffce3415c61ca",
+  "durationMs": 21521,
+  "endTimestamp": "2026-09-01T15:22:28.871Z"
+}]}
+```
+
+**La versión inferida era inválida por tres motivos a la vez**, y cualquiera de
+los tres bastaba para que el servidor la rechazara sin llegar a mirar los datos:
+
+1. La variable se llama `$messages`, no `$overheads`.
+2. No lleva `userId` — el usuario sale del Bearer.
+3. `usageOverhead` devuelve un **escalar**: pedirle `{ id __typename }` es un
+   error de validación por sí solo.
+
+El mensaje tampoco es un `ProgressMessage` recortado, que es lo que se había
+supuesto: no hay `sequenceId` ni `activityId`, el curso viaja como
+`learningContext` y el `id` es del mensaje, no de la actividad. `UsageOverheadMessage`
+es un input estricto, así que los campos de más no se ignoran: invalidan.
+
+Sigue siendo **best-effort** y apagada por default
+(`FLUENCY_SEND_USAGE_OVERHEAD=0`): la completación (0%→100%, confirmada en
+corrida real) funciona solo con `AddProgress`, esto es telemetría de tiempo de
+uso. Un fallo aquí se loguea a `debug` y nunca revierte el `AddProgress` ya
+exitoso. Lo que queda por confirmar es solo que el servidor la acepta con el
+esquema bueno.
 
 ## Mapeo a dominio (capa de lectura implementada)
 
@@ -441,7 +461,9 @@ enganchar `AudioBufferSourceNode.start` y serializar `getChannelData` a WAV.
 
 - Reproducir el audio del enunciado antes de responder: deja el reproductor
   ocupado y los altavoces de las respuestas dejan de sonar.
-- Enrutar `DialogueExpressionWithoutReco` a la ruta de voz: no tiene micrófono.
+- Enrutar `DialogueExpressionWithoutReco` a la ruta de voz **tal y como estaba**:
+  esperaba el micrófono y esa actividad no lo tiene. Lo que fallaba era la
+  espera, no el enrutado — ver "La conclusión que estaba mal".
 - Esperar a que el micrófono se habilite como prueba de que se eligió respuesta:
   son dos cosas distintas.
 
@@ -470,9 +492,57 @@ Tres, sacados de los errores de una corrida real:
   verificar a cambio de nada. Si algún día una tarjeta se queda de verdad en 1/N,
   los `wordId` están en `content[0].carousel` con `type: "word"`.
 
-- **`DialogueExpressionWithoutReco` (17 actividades)**: hueco abierto de verdad.
-  Son `multipleChoice` con sus `correct` presentes, la API los acepta y los deja
-  en 0, y la ruta de voz no les sirve porque no tienen micrófono.
+- **`DialogueExpressionWithoutReco`**: ya no es un hueco, es una ruta. Ver
+  "La conclusión que estaba mal" más abajo. Falta confirmarlo contra la cuenta
+  viva: el código está, la corrida que lo ejercite no.
+
+## La conclusión que estaba mal (02-09-2026)
+
+Durante dos semanas la nota decía que `DialogueExpressionWithoutReco` era un
+hueco imposible: 17 actividades que la API acepta y deja en 0, y a las que la
+ruta de voz no sirve "porque no tienen micrófono". La primera mitad es cierta.
+La segunda es una conclusión sacada de un síntoma.
+
+Lo que se hizo entonces fue enrutar el tipo a la ruta de voz **sin cambiarla**.
+La ruta abría la actividad y esperaba el botón de micrófono; como no llegaba, se
+agotaban 90 s y se abandonaba. De ahí salió "no se puede", cuando lo que se había
+medido es "esta espera no vale para este tipo".
+
+Lo que dicen los datos, cruzando el catálogo entero (5.701 actividades con
+pasos):
+
+| | `ordering` | `inputType` de sus pasos |
+|---|---|---|
+| `DialogueExpressionWithReco` | `tree` | `speaking` (351 pasos) |
+| `DialogueExpressionWithoutReco` | `tree` | `select` (224 pasos) |
+| Todo lo demás | `fixed` / `random` | — |
+
+Dos cosas caen de ahí:
+
+- **`ordering: "tree"` existe en 46 actividades y solo en esas 46**: las 27
+  `WithReco` más las 19 `WithoutReco`. Son exactamente las que la API no
+  acredita. Lo que el servidor no acepta fabricado **es el árbol, no la voz** —
+  y por eso el resto de tipos con pasos `select` (128 `RightWordWithoutReco`,
+  117 `WordOrderWithoutReco`, 92 `FITB`…) se completan por API sin problema.
+- **`WithoutReco` se contesta pulsando** (`inputType: select`). No es que no
+  haya forma de responder: es que no se responde hablando.
+
+El arreglo es un detector de modo en la página (`_input_mode`): tras abrir la
+actividad se espera a que aparezca **el micrófono o las respuestas**, lo primero
+que llegue. Con micrófono, el flujo de siempre. Sin él, `_complete_visible_choice_step`
+marca una respuesta y pulsa *Próximo paso*, sin tocar el micrófono virtual ni la
+comprobación de micrófono. `_another_step_starts` también depende del modo:
+eligiendo, la señal de que queda otro turno es que vuelva a haber respuestas, no
+que vuelva el micrófono — preguntando por el micrófono, toda conversación
+`WithoutReco` se daba por acabada en su primer paso.
+
+Una diferencia que sí importa: hablando, marcar la respuesta es opcional (el
+reconocedor decide cuál has dicho); eligiendo es obligatorio, porque no hay otra
+forma de contestar. Un clic que no se registra es el final del paso, no un aviso.
+
+**Falta la confirmación contra la cuenta viva.** Nada de esto se ha ejercitado
+todavía contra el servidor: la última corrida es del 01-09 a las 11:02 y el
+código cambió después.
 
 ## Resuelto
 
