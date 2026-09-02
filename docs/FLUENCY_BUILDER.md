@@ -545,9 +545,26 @@ Una diferencia que sí importa: hablando, marcar la respuesta es opcional (el
 reconocedor decide cuál has dicho); eligiendo es obligatorio, porque no hay otra
 forma de contestar. Un clic que no se registra es el final del paso, no un aviso.
 
-**Falta la confirmación contra la cuenta viva.** Nada de esto se ha ejercitado
-todavía contra el servidor: la última corrida es del 01-09 a las 11:02 y el
-código cambió después.
+**Confirmado contra la cuenta viva (02-09-2026).** La nota anterior decía que
+faltaba: estaba equivocada, y bastaba con leer `logs/runs/`. Las seis corridas
+de ese día suman **38 conversaciones con `Speech verification: percentComplete=1`
+y ninguna en 0**. Separadas por ruta según lo que dice el log justo antes:
+
+| Ruta | Acreditadas |
+|---|---|
+| `WithoutReco` — se contesta eligiendo | 13 |
+| `WithReco` — se contesta hablando | 10 |
+| No atribuibles desde el log | 15 |
+
+Las dos rutas funcionan y el servidor acredita las dos. Queda enterrada, por
+fin, la idea de que `WithoutReco` era un hueco imposible.
+
+Lo que sigue sin estar al 100% —14 lecciones entre 89% y 94%— **no es la ruta
+fallando**: es que las corridas se interrumpían antes de terminarlas. En el
+volcado autoritativo (`fluency_getProgress_20260902_102813`) cada lección
+incompleta tiene **exactamente una** actividad frenándola, y no siempre en 0:
+hay 4,8%, 5,6% y 5,9%, que es un paso de 17-21. Una conversación a medias, no
+una rechazada.
 
 ## Resuelto
 

@@ -433,16 +433,23 @@ uv run pytest -q -s [path/test_file.py]   # sin capturar print()
   navegador. `WithoutReco` estuvo apuntada como "hueco imposible" por una
   conclusión mal sacada — se enrutó a la ruta de voz sin adaptarla, esperó un
   micrófono que esos pasos (`inputType: select`) no tienen y se leyó el timeout
-  como imposibilidad. **Pendiente real:** una corrida contra la cuenta viva; el
-  código está sin ejercitar desde el 01-09 11:02.
+  como imposibilidad.
 
-  **Con la cuenta del `.env` no se puede cerrar** (comprobado el 02-09-2026
-  corriendo el bot): es Foundations y ya está al 100% —179 paths hechos, 0
-  elegibles—, así que `CompleteFluencyOrchestrator` no llega a ejecutarse y
-  `FLUENCY_SEND_USAGE_OVERHEAD` da igual lo que valga. Hace falta la cuenta
-  Fluency, la misma de las trazas del 01-09. Lo que sí queda cubierto sin
-  cuenta es el reparto de rutas (`tests/.../test_fluency_speech_route.py`):
-  enrutar otra vez todo a la ruta hablada hace fallar tres de esos tests.
+  **CONFIRMADO contra la cuenta viva** (02-09-2026, leyendo `logs/runs/`): las
+  seis corridas de ese día suman **38 conversaciones verificadas con
+  `percentComplete=1` y ninguna en 0** — 13 por la ruta de elegir
+  (`WithoutReco`) y 10 por la de hablar (`WithReco`), más 15 que el log no
+  permite atribuir. La nota que decía "el código está sin ejercitar desde el
+  01-09 11:02" estaba equivocada: sí se ejercitó, y funciona. El servidor
+  acredita las dos rutas.
+
+  Lo que queda al 89-94% no es que la ruta falle: es que **las corridas se
+  interrumpían** antes de acabar (navegador cerrado, esperas agotadas). Los dos
+  arreglos del 02-09 —`BrowserGone` y el audio atascado— van justo a eso.
+
+  Ojo con la cuenta: la del `.env` es **Foundations** y ya está al 100%, así que
+  `CompleteFluencyOrchestrator` ni se ejecuta con ella. Fluency es
+  `e1314209030@live.uleam.edu.ec`, cuya contraseña no está guardada en el repo.
 - ~~Ajuste de las horas~~ — implementado (`FluencyDurationCalculator`):
   presupuesto total de horas de estudio (`FLUENCY_TOTAL_COURSE_HOURS`,
   default 70) repartido con jitter entre las lecciones y steps de la
