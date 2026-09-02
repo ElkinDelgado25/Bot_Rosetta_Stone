@@ -1500,10 +1500,15 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         # respuesta de referencia hay que pulsar el altavoz. En la traza de la
         # actividad fallida se ve `audio_playing` yendo y viniendo durante los
         # 90 s que pasamos esperando a que el botón se habilitara.
-        await self._wait(
-            "() => !document.querySelector('[data-qa=audio_playing]')",
-            "que el reproductor deje de reproducir audio",
-        )
+        #
+        # Es una condición previa, no el veredicto. Esperarla en firme costó una
+        # actividad en la corrida del 02-09 a las 10:29 ("Se agotó la espera de:
+        # que el reproductor deje de reproducir audio"), y sin llegar a mirar
+        # nunca el botón — que es lo único que de verdad decide si se puede
+        # hablar. Si el audio se atasca pero el micrófono está listo, antes se
+        # perdía la actividad para nada. Sonda corta: si en ese rato no se ha
+        # callado, la respuesta la da el botón, no otra espera larga.
+        await self._wait_for_all_audio_to_stop(timeout_ms=self.probe_timeout_ms)
         try:
             await self._wait(
                 "() => { const e = document.querySelector('[data-qa=SpeechButton]'); "
@@ -1592,12 +1597,18 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         await self._wait_for_all_audio_to_stop()
         return body
 
-    async def _wait_for_all_audio_to_stop(self) -> None:
-        """Espera a que no quede ningún altavoz sonando. No falla si queda."""
+    async def _wait_for_all_audio_to_stop(self, timeout_ms: int | None = None) -> None:
+        """Espera a que no quede ningún altavoz sonando. No falla si queda.
+
+        Que el audio no se calle nunca es molesto, no mortal: lo que decide si
+        se puede seguir es el botón, y él tiene su propia espera con su propio
+        diagnóstico. Esto era la única espera de audio que sí mataba la
+        actividad, y las dos miran exactamente la misma condición.
+        """
         try:
             await self.page.wait_for_function(
                 "() => !document.querySelector('[data-qa=audio_playing]')",
-                timeout=self.timeout_ms,
+                timeout=timeout_ms if timeout_ms is not None else self.timeout_ms,
             )
         except PlaywrightTimeoutError:
             self.logger.debug("  El reproductor sigue sonando; se continúa")

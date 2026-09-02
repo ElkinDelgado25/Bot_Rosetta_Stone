@@ -75,8 +75,22 @@ class TestSpeechButton:
         assert any("outerHTML" in e for e in page.evaluated)
         assert page.button.clicked is False
 
-    def test_audio_that_never_stops_does_not_reach_the_button(self):
+    def test_audio_that_never_stops_still_lets_the_button_decide(self):
+        """Este test decía lo contrario, y estaba de más.
+
+        Esperar el audio se puso por una razón de orden: hacerlo antes evita
+        que la espera del botón queme sus 90 s mientras suena algo. Esa razón
+        sigue viva y el orden no cambia. Lo que no se sostenía es tratar el
+        audio atascado como el final de la actividad: quien decide si se puede
+        hablar es el botón, y tiene su propia espera con su propio diagnóstico.
+
+        Costó una actividad en la corrida del 02-09-2026 a las 10:29 — "Se
+        agotó la espera de: que el reproductor deje de reproducir audio" — sin
+        haber mirado el botón ni una vez.
+        """
         page = _Page(falla="audio_playing")
-        with pytest.raises(PlaywrightTimeoutError):
-            asyncio.run(_speech(page)._click_speech_button())
-        assert len(page.waits) == 1
+        asyncio.run(_speech(page)._click_speech_button())
+        assert len(page.waits) == 2
+        assert "audio_playing" in page.waits[0]
+        assert "SpeechButton" in page.waits[1]
+        assert page.button.clicked

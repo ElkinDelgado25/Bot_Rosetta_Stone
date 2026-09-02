@@ -74,3 +74,81 @@ class TestEsperarSilencio:
     def test_audio_that_never_stops_does_not_sink_the_activity(self):
         page = _Page(coincidencias=1, se_calla=False)
         _esperar(page)  # no debe propagar
+
+
+class _PageQueNoSeCalla:
+    """El audio nunca para, pero el micrófono está perfectamente listo."""
+
+    def __init__(self):
+        self.esperas = []
+
+    async def wait_for_function(self, expression, timeout=None, arg=None):
+        self.esperas.append((expression, timeout))
+        if "audio_playing" in expression:
+            raise PlaywrightTimeoutError("sigue sonando")
+        return None
+
+
+class _Boton:
+    def __init__(self):
+        self.pulsado = False
+
+    @property
+    def first(self):
+        return self
+
+    async def wait_for(self, state=None, timeout=None):
+        return None
+
+    async def click(self, **kwargs):
+        self.pulsado = True
+
+
+class _PageAudioAtascadoBotonListo(_PageQueNoSeCalla):
+    """El audio nunca se calla, pero el micrófono sí está habilitado."""
+
+    def __init__(self):
+        super().__init__()
+        self.boton = _Boton()
+
+    def get_by_test_id(self, test_id):
+        return self.boton
+
+
+class TestElAudioAtascadoNoMataLaActividad:
+    """Medido el 02-09-2026 a las 10:29: una actividad perdida por esto.
+
+    "Se agotó la espera de: que el reproductor deje de reproducir audio", y sin
+    haber mirado nunca el botón — que es lo único que decide si se puede hablar.
+    La misma condición se esperaba en dos sitios del archivo con criterios
+    opuestos: aquí era fatal, en ``_wait_for_all_audio_to_stop`` era benigna.
+    """
+
+    def test_un_audio_que_no_para_no_levanta_excepcion(self):
+        page = _PageQueNoSeCalla()
+        speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
+        asyncio.run(speech._wait_for_all_audio_to_stop(timeout_ms=speech.probe_timeout_ms))
+
+    def test_como_condicion_previa_usa_la_sonda_corta(self):
+        """No puede costar lo mismo que una espera de verdad: no es el veredicto."""
+        page = _PageQueNoSeCalla()
+        speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
+        asyncio.run(speech._wait_for_all_audio_to_stop(timeout_ms=speech.probe_timeout_ms))
+        assert page.esperas[0][1] == speech.probe_timeout_ms
+        assert page.esperas[0][1] < speech.timeout_ms
+
+
+class TestPulsarElMicrofonoConAudioAtascado:
+    def test_se_pulsa_el_microfono_aunque_el_audio_no_pare(self):
+        """El arreglo de verdad: antes esto perdía la actividad sin mirar el botón."""
+        page = _PageAudioAtascadoBotonListo()
+        speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
+        asyncio.run(speech._click_speech_button())
+        assert page.boton.pulsado is True
+
+    def test_la_espera_de_audio_no_gasta_el_timeout_largo(self):
+        page = _PageAudioAtascadoBotonListo()
+        speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
+        asyncio.run(speech._click_speech_button())
+        de_audio = [t for e, t in page.esperas if "audio_playing" in e]
+        assert de_audio == [speech.probe_timeout_ms]
