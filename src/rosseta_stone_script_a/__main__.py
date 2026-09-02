@@ -4,9 +4,16 @@ import sys
 def main():
     # Create .env interactively if missing, BEFORE importing anything that
     # reads settings, so pydantic finds the file on first load.
-    from rosseta_stone_script_a.infrastructure.core import ensure_env_exists
+    from rosseta_stone_script_a.infrastructure.core import (
+        ensure_env_exists,
+        load_env_into_environ,
+    )
 
     ensure_env_exists()
+    # Después de crear el .env si faltaba, y antes de que nadie lea un knob:
+    # así los FLUENCY_*/STORIES_* del .env llegan a os.getenv, no solo los
+    # campos que declara pydantic. Ver env_loader.
+    load_env_into_environ()
 
     from rosseta_stone_script_a.presentation.cli import main_cli
 
