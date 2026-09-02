@@ -213,17 +213,23 @@ def _play(page, listen):
 
 
 class TestPlayReferenceAudio:
-    def test_the_speaker_click_is_enough_when_it_works(self):
+    def test_the_dom_click_goes_first_because_it_is_the_one_that_works(self):
+        """El orden sale de las trazas, no del gusto.
+
+        El clic por DOM acierta en 0,5-2,5 s; el clic con ``force`` agota su
+        sonda casi siempre. Probándolo al revés se pagaban ~8 s por paso
+        comprando un fallo ya conocido.
+        """
         listen = _Listen()
         assert _play(_Page(habilita_tras=1), listen) is True
-        assert listen.clicks == 1
-        assert listen.dom_clicks == 0
+        assert listen.dom_clicks == 1
+        assert listen.clicks == 0
 
-    def test_falls_back_to_a_dom_click(self):
+    def test_falls_back_to_the_forced_click(self):
         # La primera consulta la gasta la espera del reconocedor.
         listen = _Listen()
         assert _play(_Page(habilita_tras=3), listen) is True
-        assert listen.dom_clicks == 1
+        assert listen.clicks == 1
 
     def test_falls_back_to_the_speaker_icon(self):
         listen = _Listen()

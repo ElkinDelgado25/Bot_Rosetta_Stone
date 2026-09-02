@@ -17,9 +17,15 @@ from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_
 
 
 class _Button:
+
     def __init__(self):
         self.clicked = False
 
+
+    @property
+    def first(self):
+        """Un locator de verdad siempre lo ofrece; el código lo usa."""
+        return self
     async def wait_for(self, state=None, timeout=None):
         return None
 

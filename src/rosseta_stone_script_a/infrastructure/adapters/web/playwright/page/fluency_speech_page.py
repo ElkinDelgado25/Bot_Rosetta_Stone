@@ -407,6 +407,8 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         # Que el reconocedor no entienda una respuesta no es un fallo: a una
         # persona también le pasa, y el reproductor ofrece "Volver a intentar".
         self.speech_attempts = max(1, speech_attempts)
+        # Ver _wait_for_recognizer: se rearma al empezar cada actividad.
+        self._reconocedor_mudo = False
 
     async def complete_activity(
         self,
@@ -418,6 +420,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
     ) -> bool:
         """Completa la conversación, grabando la sesión si se pidió traza."""
         tracing = await self._start_trace()
+        self._reconocedor_mudo = False
         completed = False
         try:
             completed = await self._complete_activity(
@@ -488,33 +491,46 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 self.logger.info("  Speech activity already complete in lesson map")
                 return True
 
-            activity = self.page.get_by_test_id(f"activity_{activity_id}")
+            # El mapa pinta la misma actividad dos veces (medido en una
+            # corrida real): sin ``.first`` esperarla es una violación de
+            # modo estricto que tumba la actividad entera.
+            activity = self.page.get_by_test_id(f"activity_{activity_id}").first
             await activity.wait_for(state="visible", timeout=self.timeout_ms)
             # The horizontal activity map places a transparent drag layer above
             # its items. Dispatching the click to the known data-qa target is the
             # same user action without relying on coordinates.
             await activity.click(force=True)
-            try:
-                await self.page.get_by_test_id("SpeechButton").wait_for(
-                    state="visible", timeout=self.probe_timeout_ms
-                )
-            except PlaywrightTimeoutError:
+
+            modo = await self._input_mode()
+            if modo == "desconocido":
                 self.logger.error(
-                    "  Esta actividad no tiene botón de micrófono: la ruta de voz "
-                    "no le sirve (¿un tipo mal enrutado?)"
+                    "  La actividad no enseñó ni micrófono ni respuestas: no hay "
+                    "nada que contestar (¿un tipo mal enrutado?)"
                 )
                 return False
-            await self.page.evaluate(_VIRTUAL_MIC_SCRIPT)
-            await self.page.evaluate(_REFERENCE_AUDIO_CAPTURE_SCRIPT)
-            await self._load_mic_check_audio()
-            await self._dismiss_microphone_check()
+
+            if modo == "hablar":
+                await self.page.evaluate(_VIRTUAL_MIC_SCRIPT)
+                await self.page.evaluate(_REFERENCE_AUDIO_CAPTURE_SCRIPT)
+                await self._load_mic_check_audio()
+                await self._dismiss_microphone_check()
+            else:
+                self.logger.info(
+                    "  Conversación sin reconocimiento: se responde eligiendo, "
+                    "no hablando"
+                )
 
             for step_number in range(1, max(1, expected_steps) + 1):
-                if not await self._complete_visible_step(step_number):
+                resuelto = (
+                    await self._complete_visible_step(step_number)
+                    if modo == "hablar"
+                    else await self._complete_visible_choice_step(step_number)
+                )
+                if not resuelto:
                     return False
 
                 if step_number < expected_steps and not await self._another_step_starts(
-                    step_number
+                    step_number, modo
                 ):
                     return True
 
@@ -532,13 +548,13 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         await courses.first.wait_for(state="visible", timeout=self.timeout_ms)
 
         course = await self._single_card(courses, course_title, "curso")
-        await course.get_by_test_id("LaunchCourseButton").click()
+        await course.get_by_test_id("LaunchCourseButton").first.click()
 
         lessons = self.page.get_by_test_id("LessonDisplayer")
         await lessons.first.wait_for(state="visible", timeout=self.timeout_ms)
         lesson = await self._single_card(lessons, lesson_title, "lección")
-        await lesson.get_by_test_id("LaunchButton").click()
-        await self.page.get_by_test_id("ActivityMapList").wait_for(
+        await lesson.get_by_test_id("LaunchButton").first.click()
+        await self.page.get_by_test_id("ActivityMapList").first.wait_for(
             state="visible", timeout=self.timeout_ms
         )
 
@@ -563,7 +579,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         return matching.first
 
     async def _complete_visible_step(self, step_number: int) -> bool:
-        prompt = self.page.get_by_test_id("PromptText")
+        prompt = self.page.get_by_test_id("PromptText").first
         previous_prompt = (await prompt.text_content() or "").strip()
         choices = self.page.get_by_test_id("ChoiceButton")
         if await choices.count() == 0:
@@ -582,7 +598,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         # el reproductor escuchó y contestó "Volver a intentar", que es un
         # veredicto, no un bloqueo. Tratarlo como error hundía el paso antes de
         # llegar a hablar, que es lo único que de verdad lo resuelve.
-        if not await self._select_choice(choice):
+        if not await self._select_choice(choice, exhaustivo=False):
             self.logger.info(
                 "  El paso %d no marcó ninguna respuesta; se contesta hablando",
                 step_number,
@@ -601,43 +617,98 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             return False
         return True
 
-    async def _advance_to_next_step(self, previous_prompt: str) -> bool:
-        """Pulsa *Próximo paso* hasta que el enunciado cambie.
+    # Tras un clic, el reproductor cambia *algo* en menos de un segundo: o el
+    # enunciado (avanzó) o el texto del botón (registró la pulsación). Cuatro
+    # segundos son de sobra; lo que sobraba eran los quince que se esperaban
+    # antes por no mirar el botón.
+    _ADVANCE_PROBE_MS = 4_000
 
-        Con la respuesta aceptada, el pie se vuelve morado con "Esta es la
-        respuesta correcta" y el botón pasa a "Próximo paso" — pero llega
-        deshabilitado mientras suena la confirmación. Un solo clic, dado nada
-        más conocerse el veredicto, se pierde: la espera del enunciado
-        siguiente se agotaba a los 90 s con el paso ya resuelto en pantalla.
+    async def _advance_to_next_step(self, previous_prompt: str) -> bool:
+        """Pulsa hasta que el enunciado cambie, mirando qué pasa entre clics.
+
+        Hacen falta **dos** pulsaciones por paso: la primera envía la respuesta
+        y solo cambia el texto del botón; la segunda es la que avanza. Esperar
+        únicamente al cambio de enunciado hacía que la primera agotara el
+        timeout entero — 15 s por paso, en las dos rutas. Medido en las trazas:
+        clic, 15 s en blanco, segundo clic, y el enunciado cambia al instante.
+
+        (El docstring anterior culpaba al botón de llegar deshabilitado. No es
+        eso: la comprobación de habilitado tarda 0,00 s antes del segundo clic.
+        El primer clic no se pierde, gasta una transición distinta.)
+
+        Se mira el enunciado **antes** de cada pulsación, así que en cuanto ha
+        avanzado ya no se pulsa más. Eso es lo que impide el fallo peligroso:
+        un clic de más caería sobre el "Omitir" del paso siguiente y lo saltaría
+        sin contestarlo.
         """
-        habilitado = (
-            "() => { const e = document.querySelector('[data-qa=SubmitButton]'); "
-            "return e && !e.hasAttribute('disabled') "
-            "&& e.getAttribute('aria-disabled') !== 'true'; }"
+        estado = (
+            "() => { const p = document.querySelector('[data-qa=PromptText]'); "
+            "const b = document.querySelector('[data-qa=SubmitButton]'); "
+            "return { prompt: p ? (p.textContent || '').trim() : null, "
+            "boton: b ? (b.getAttribute('data-qa-button-text') "
+            "|| b.textContent || '').trim() : '', "
+            "listo: Boolean(b) && !b.hasAttribute('disabled') "
+            "&& b.getAttribute('aria-disabled') !== 'true' }; }"
         )
-        cambio = (
-            "oldPrompt => { const e = document.querySelector('[data-qa=PromptText]'); "
-            "return !e || (e.textContent || '').trim() !== oldPrompt; }"
-        )
-        boton = self.page.get_by_test_id("SubmitButton")
+        boton = self.page.get_by_test_id("SubmitButton").first
+
         for _ in range(self.speech_attempts):
+            antes = await self.page.evaluate(estado)
+            # Ya estamos en el paso siguiente: pulsar ahora sería saltárselo.
+            if antes["prompt"] is None or antes["prompt"] != previous_prompt:
+                return True
+
             try:
                 await self.page.wait_for_function(
-                    habilitado, timeout=self.probe_timeout_ms
+                    "() => { const e = document.querySelector('[data-qa=SubmitButton]'); "
+                    "return e && !e.hasAttribute('disabled') "
+                    "&& e.getAttribute('aria-disabled') !== 'true'; }",
+                    timeout=self._ADVANCE_PROBE_MS,
                 )
             except PlaywrightTimeoutError:
                 pass  # se intenta pulsar igual: el atributo puede no estar
+
             try:
                 await boton.click(force=True, timeout=self.probe_timeout_ms)
             except Exception as error:  # noqa: BLE001 - queda otro intento
                 self.logger.debug("  No se pudo pulsar el paso siguiente: %s", error)
+
+            # Cualquiera de las dos señales sirve para seguir: el enunciado
+            # cambió (hemos acabado) o el botón cambió (el clic entró, toca
+            # pulsar otra vez). Solo si no se mueve nada se espera de verdad.
+            movio = (
+                "datos => { const p = document.querySelector('[data-qa=PromptText]'); "
+                "const b = document.querySelector('[data-qa=SubmitButton]'); "
+                "const prompt = p ? (p.textContent || '').trim() : null; "
+                "const boton = b ? (b.getAttribute('data-qa-button-text') "
+                "|| b.textContent || '').trim() : ''; "
+                "return prompt === null || prompt !== datos.prompt "
+                "|| boton !== datos.boton; }"
+            )
             try:
                 await self.page.wait_for_function(
-                    cambio, arg=previous_prompt, timeout=self.probe_timeout_ms
+                    movio, arg=antes, timeout=self._ADVANCE_PROBE_MS
                 )
-                return True
             except PlaywrightTimeoutError:
-                continue
+                # Nada se movió: puede que el reproductor siga ocupado. Esta es
+                # la única espera que conserva la sonda larga.
+                try:
+                    await self.page.wait_for_function(
+                        "oldPrompt => { const e = "
+                        "document.querySelector('[data-qa=PromptText]'); "
+                        "return !e || (e.textContent || '').trim() !== oldPrompt; }",
+                        arg=previous_prompt,
+                        timeout=self.probe_timeout_ms,
+                    )
+                    return True
+                except PlaywrightTimeoutError:
+                    continue
+
+            despues = await self.page.evaluate(estado)
+            if despues["prompt"] is None or despues["prompt"] != previous_prompt:
+                return True
+            # Solo cambió el botón: el clic entró y falta el que avanza.
+
         return False
 
     async def _speak_until_accepted(self, audio: bytes, step_number: int) -> bool:
@@ -693,16 +764,22 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         await self._dump_screenshot("respuesta_no_aceptada")
         return False
 
-    async def _another_step_starts(self, step_number: int) -> bool:
+    async def _another_step_starts(
+        self, step_number: int, modo: str = "hablar"
+    ) -> bool:
         """¿Queda otro paso, o la conversación se acabó antes de la cuenta?
 
         ``expected_steps`` viene de la API y **no coincide con lo que pinta el
         reproductor**: una actividad que declaraba 13 tenía 10 enunciados. Al
         acabar el décimo se esperaban 90 s a un micrófono que ya no vuelve y la
         conversación, terminada y al 100%, se daba por fallida.
+
+        La señal de "queda otro paso" depende del modo: hablando es que vuelva
+        el micrófono; eligiendo, que vuelva a haber respuestas que pulsar.
         """
+        senal = "SpeechButton" if modo == "hablar" else "ChoiceButton"
         try:
-            await self.page.get_by_test_id("SpeechButton").wait_for(
+            await self.page.get_by_test_id(senal).first.wait_for(
                 state="visible", timeout=self.probe_timeout_ms
             )
             return True
@@ -712,6 +789,62 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 step_number,
             )
             return False
+
+    async def _input_mode(self) -> str:
+        """Cómo se contesta esta actividad: ``hablar``, ``elegir`` o nada.
+
+        Las dos conversaciones del árbol comparten reproductor y se distinguen
+        por el ``inputType`` de sus pasos: ``speaking`` pinta el micrófono,
+        ``select`` solo las respuestas. Antes se exigía el micrófono y se
+        abandonaba sin él, que es lo que hacía imposible ``WithoutReco``: la
+        actividad estaba bien, la que no servía era la espera.
+        """
+        try:
+            await self.page.wait_for_function(
+                "() => Boolean(document.querySelector('[data-qa=SpeechButton]') "
+                "|| document.querySelector('[data-qa=ChoiceButton]'))",
+                timeout=self.probe_timeout_ms,
+            )
+        except PlaywrightTimeoutError:
+            return "desconocido"
+        if await self.page.get_by_test_id("SpeechButton").count():
+            return "hablar"
+        return "elegir"
+
+    async def _complete_visible_choice_step(self, step_number: int) -> bool:
+        """Resuelve un paso que se contesta pulsando, sin micrófono de por medio.
+
+        Aquí marcar la respuesta **sí es obligatorio**: hablando el reconocedor
+        decide por ti aunque no marques nada, pero eligiendo no hay otra forma de
+        contestar, así que un clic que no se registra es el final del paso.
+        """
+        prompt = self.page.get_by_test_id("PromptText").first
+        previous_prompt = (await prompt.text_content() or "").strip()
+        choices = self.page.get_by_test_id("ChoiceButton")
+        if await choices.count() == 0:
+            self.logger.error("  El paso %d no tiene respuestas", step_number)
+            return False
+
+        # El enunciado suena al entrar en el paso y el reproductor ignora los
+        # clics mientras tanto: es la misma espera que hace la ruta hablada.
+        await self._wait_for_silence()
+
+        if not await self._select_choice(choices.first):
+            self.logger.error(
+                "  El paso %d no llegó a marcar ninguna respuesta", step_number
+            )
+            await self._dump_screenshot("respuesta_no_marcada")
+            return False
+
+        if not await self._advance_to_next_step(previous_prompt):
+            self.logger.error(
+                "  El paso %d quedó marcado pero el reproductor no avanzó",
+                step_number,
+            )
+            await self._dump_screenshot("sin_avanzar_de_paso")
+            return False
+        self.logger.info("  Paso %d resuelto eligiendo respuesta", step_number)
+        return True
 
     async def _wait_until_recording(self) -> None:
         """Espera a que el botón entre en modo grabación antes de hablar.
@@ -763,7 +896,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
     async def _press_retry(self) -> bool:
         """Pulsa *Volver a intentar* para poder hablar otra vez."""
         try:
-            await self.page.get_by_test_id("SubmitButton").click(
+            await self.page.get_by_test_id("SubmitButton").first.click(
                 force=True, timeout=self.probe_timeout_ms
             )
         except Exception as error:  # noqa: BLE001 - sin reintento, se abandona
@@ -916,9 +1049,13 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
 
     async def _play_reference_audio(self, listen: Any) -> bool:
         """Hace sonar la respuesta, comprobando que de verdad suena."""
+        # El clic por DOM va primero porque es el que acierta: en las trazas
+        # resuelve en 0,5-2,5 s, mientras que el clic con ``force`` agota sus
+        # 8 s casi siempre y solo después se probaba este. Ir en el otro orden
+        # costaba ~8 s por paso comprando un fallo conocido.
         intentos = (
-            ("el altavoz", lambda: listen.first.click(force=True, timeout=self.probe_timeout_ms)),
             ("el altavoz por DOM", lambda: listen.first.evaluate("el => el.click()")),
+            ("el altavoz", lambda: listen.first.click(force=True, timeout=self.probe_timeout_ms)),
             ("el icono del altavoz", lambda: listen.first.get_by_test_id("SpeakerIcon").first.click(force=True, timeout=self.probe_timeout_ms)),
         )
         await self._wait_for_recognizer()
@@ -1139,12 +1276,18 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         tiempo es lo que hacía que el altavoz no sonara en unas corridas sí y
         en otras no.
         """
+        # La señal llega una vez o no llega nunca: en las cuatro trazas hay
+        # exactamente un timeout por actividad, sean 3 o 9 las llamadas. Pagar
+        # los 15 s en cada paso es pagar el mismo silencio muchas veces.
+        if self._reconocedor_mudo:
+            return
         try:
             await self.page.wait_for_function(
                 "() => window.__rosettaSreReady === true",
                 timeout=self.probe_timeout_ms,
             )
         except PlaywrightTimeoutError:
+            self._reconocedor_mudo = True
             self.logger.debug("  El reconocedor no avisó de estar listo; se continúa")
 
     async def _reference_audio_captured(self) -> bool:
@@ -1161,13 +1304,16 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 "() => Boolean(window.__rosettaReferenceAudio || "
                 "window.__rosettaReferenceAudioUrl || window.__rosettaLastPlayedAudio "
                 "|| document.querySelector('[data-qa=audio_playing]'))",
-                timeout=8_000,
+                # Los aciertos tardan 0,5-2,5 s; 4 s es holgado. Si se queda
+                # corto se ve en el log ("El altavoz de la respuesta no sonó")
+                # y el audio de reserva ya está puesto.
+                timeout=4_000,
             )
             return True
         except PlaywrightTimeoutError:
             return False
 
-    async def _select_choice(self, choice: Any) -> bool:
+    async def _select_choice(self, choice: Any, *, exhaustivo: bool = True) -> bool:
         """Marca la respuesta y comprueba que el reproductor se ha enterado.
 
         Las respuestas son radios (``ChoiceButton_1/2/3``) y el micrófono no se
@@ -1184,6 +1330,16 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             ("la secuencia completa de puntero", self._dispatch_pointer_sequence),
             ("la secuencia sobre todo el subárbol", self._dispatch_on_subtree),
         )
+        # Hablando no hace falta insistir: está medido que **ninguna** de las
+        # cinco vías registra la marca (30/30, 15/15, 5/5 y 5/5 timeouts en
+        # cuatro trazas), y no por mala suerte — la señal que se espera es que
+        # el botón deje de decir "Omitir", y hablando eso no ocurre hasta que
+        # hablas. Eran 10 s por paso comprando un no. Se conserva un intento,
+        # con sonda corta, por si alguna vez ayuda.
+        sonda_ms = 2_000 if exhaustivo else 500
+        if not exhaustivo:
+            intentos = intentos[:1]
+
         pintado_antes = await self._choice_paint(choice)
         for descripcion, intento in intentos:
             try:
@@ -1191,7 +1347,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             except Exception as error:  # noqa: BLE001 - se prueba el siguiente
                 self.logger.debug("  No se pudo pulsar %s: %s", descripcion, error)
                 continue
-            if await self._choice_registered(choice, pintado_antes):
+            if await self._choice_registered(choice, pintado_antes, sonda_ms):
                 self.logger.info("  Respuesta marcada pulsando %s", descripcion)
                 return True
         return False
@@ -1211,7 +1367,9 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         except Exception:  # noqa: BLE001 - es una comprobación, no puede hundir nada
             return ""
 
-    async def _choice_registered(self, choice: Any, pintado_antes: str) -> bool:
+    async def _choice_registered(
+        self, choice: Any, pintado_antes: str, sonda_ms: int = 2_000
+    ) -> bool:
         """¿Se ha enterado el reproductor de que hemos elegido?
 
         Ya **no** vale que el micrófono esté habilitado: desde que la
@@ -1236,7 +1394,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                     );
                     return Boolean(yaNoOmite || marcado);
                 }""",
-                timeout=2_000,
+                timeout=sonda_ms,
             )
             return True
         except PlaywrightTimeoutError:
@@ -1334,7 +1492,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         muere a los 30 s. ``force`` remata: salta la comprobación de
         interceptación, que es lo que fallaba aunque el botón ya estuviera listo.
         """
-        button = self.page.get_by_test_id("SpeechButton")
+        button = self.page.get_by_test_id("SpeechButton").first
         await button.wait_for(state="visible", timeout=self.timeout_ms)
 
         # El reproductor mantiene el micrófono deshabilitado mientras suena
@@ -1421,7 +1579,25 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         if not body:
             raise RuntimeError("no se pudo obtener el audio de referencia")
 
-        playing = self.page.locator('[data-qa="audio_playing"]')
-        if await playing.count():
-            await playing.wait_for(state="detached", timeout=self.timeout_ms)
+        # Pueden sonar **dos** altavoces a la vez (el del enunciado y el de la
+        # respuesta que acabamos de pulsar). Un locator con dos coincidencias
+        # hace saltar el modo estricto de Playwright, y como esto ocurre a mitad
+        # de la conversación se llevaba por delante la actividad entera con un
+        # "Speech browser flow failed" que no dice nada del audio. ``count()`` no
+        # avisa del choque: da 2, el ``if`` pasa, y revienta el ``wait_for``.
+        #
+        # Se espera por la condición en JS, que los cuenta a todos y no se casa
+        # con ninguno — y que además es lo correcto: queremos silencio, no que se
+        # vaya el primero de los dos.
+        await self._wait_for_all_audio_to_stop()
         return body
+
+    async def _wait_for_all_audio_to_stop(self) -> None:
+        """Espera a que no quede ningún altavoz sonando. No falla si queda."""
+        try:
+            await self.page.wait_for_function(
+                "() => !document.querySelector('[data-qa=audio_playing]')",
+                timeout=self.timeout_ms,
+            )
+        except PlaywrightTimeoutError:
+            self.logger.debug("  El reproductor sigue sonando; se continúa")

@@ -30,17 +30,23 @@ from rosseta_stone_script_a.shared import events
 # abriendo la actividad en el navegador y dejando que el reproductor genere el
 # resultado real.
 #
-# Solo ``DialogueExpressionWithReco``, y es a propósito: es el único con botón
-# de micrófono, que es lo que esta ruta sabe manejar.
+# Son exactamente las dos conversaciones, y no es casualidad: cruzando el
+# catálogo entero, ``ordering: "tree"`` aparece en 46 actividades — las 27
+# ``WithReco`` más las 19 ``WithoutReco`` — y en ninguna otra. Todo lo demás es
+# ``fixed`` o ``random`` y la API lo acredita sin rechistar. Lo que el servidor
+# no acepta fabricado es el árbol, no la voz.
 #
-# Se probó a meter aquí ``DialogueExpressionWithoutReco`` y salió mal: "Without
-# Reco" significa literalmente sin reconocimiento de voz, así que la actividad
-# no tiene micrófono, la espera agotaba 90 s por actividad y terminaba fallando
-# igual. Queda como estaba: por API tampoco se completa, así que sigue siendo un
-# hueco abierto — pero un hueco barato, no uno que cuesta minuto y medio.
+# ``WithoutReco`` estuvo fuera de esta lista por una conclusión mal sacada: se
+# enrutó aquí, la ruta esperaba un micrófono que esa actividad no tiene, agotaba
+# 90 s y fallaba — y se anotó como "no se puede". Lo que no se podía era
+# *esperar el micrófono*: sus pasos son ``inputType: select``, se contestan
+# pulsando. La página distingue ahora los dos modos (``_input_mode``).
 #
 # Para probar otro tipo sin tocar código: FLUENCY_BROWSER_EXTRA_TYPES=Tipo1,Tipo2
-BROWSER_COMPLETED_TYPES = ("DialogueExpressionWithReco",)
+BROWSER_COMPLETED_TYPES = (
+    "DialogueExpressionWithReco",
+    "DialogueExpressionWithoutReco",
+)
 
 
 def fluency_activity_key(course_id: str, sequence_id: str, activity_id: str) -> str:
@@ -324,9 +330,11 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
             )
             return False
 
+        # ``len(activity.steps)`` es el árbol entero, no la conversación: una
+        # que declaraba 13 nodos tenía 10 enunciados. Va como cota superior y la
+        # página corta cuando el reproductor deja de pedir turnos.
         self.logger.info(
-            "  Completing conversation through browser speech recognition "
-            "(%d steps)",
+            "  Completing conversation in the browser (hasta %d pasos)",
             len(activity.steps),
         )
         browser_ok = await self.speech_port.complete_activity(
