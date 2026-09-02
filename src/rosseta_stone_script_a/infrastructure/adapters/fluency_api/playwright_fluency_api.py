@@ -68,16 +68,15 @@ mutation AddProgress($userId: String, $messages: [ProgressMessage!]!) {
 }
 """
 
-# Inferred by analogy to AddProgress — see FluencyApiPort.add_usage_overhead and
-# docs/FLUENCY_BUILDER.md. Field names are a best-effort guess, never captured
-# from real traffic; the gaia-server may reject this with a GraphQL schema
-# error, which the adapter treats as a normal (non-fatal) failure result.
+# Capturada del reproductor real (traza de 01-09-2026, ver
+# docs/FLUENCY_BUILDER.md). La versión anterior estaba inferida por analogía con
+# AddProgress y era inválida contra el esquema en tres cosas: la variable se
+# llama ``$messages`` y no ``$overheads``, no lleva ``userId`` — el usuario sale
+# del Bearer — y ``usageOverhead`` devuelve un escalar, así que pedirle
+# ``{ id __typename }`` es un error de validación por sí solo.
 ADD_USAGE_OVERHEAD_MUTATION = """
-mutation AddUsageOverhead($userId: String, $overheads: [UsageOverheadMessage!]!) {
-  usageOverhead(userId: $userId, overheads: $overheads) {
-    id
-    __typename
-  }
+mutation AddUsageOverhead($messages: [UsageOverheadMessage!]!) {
+  usageOverhead(messages: $messages)
 }
 """
 
@@ -268,17 +267,19 @@ class PlaywrightFluencyApiAdapter(FluencyApiPort, LoggingMixin):
         user_id,
         messages,
     ) -> FluencyProgressResult:
-        activity_id = messages[0].get("activityId", "") if messages else ""
-        course_id = messages[0].get("courseId", "") if messages else ""
-        sequence_id = messages[0].get("sequenceId", "") if messages else ""
+        # UsageOverheadMessage no lleva actividad ni secuencia: el curso viaja
+        # como ``learningContext`` y es lo único identificable que hay.
+        activity_id = ""
+        course_id = messages[0].get("learningContext", "") if messages else ""
+        sequence_id = ""
 
         payload = {
             "operationName": "AddUsageOverhead",
-            "variables": {"userId": user_id, "overheads": messages},
+            "variables": {"messages": messages},
             "query": ADD_USAGE_OVERHEAD_MUTATION,
         }
         self.logger.info(
-            f"AddUsageOverhead activity={activity_id} messages={len(messages)}"
+            f"AddUsageOverhead course={course_id} messages={len(messages)}"
         )
         try:
             response = await self.request_context.post(

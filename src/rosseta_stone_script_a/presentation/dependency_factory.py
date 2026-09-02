@@ -224,10 +224,11 @@ class DependencyFactory:
             across however many lessons this run completes, mirroring the
             realistic per-path durations Foundations derives from its own
             time estimates (default 70, a full Rosetta Stone level).
-        FLUENCY_SEND_USAGE_OVERHEAD: "1"/"true" to also fire the inferred,
-            unverified AddUsageOverhead mutation after each completed
-            activity (default off — its schema was never captured from real
-            traffic; see FluencyApiPort.add_usage_overhead).
+        FLUENCY_SEND_USAGE_OVERHEAD: "1"/"true" to also fire the
+            AddUsageOverhead mutation after each completed activity (default
+            off — its schema is now captured from real traffic, but that it is
+            accepted has not been confirmed against a live account; see
+            FluencyApiPort.add_usage_overhead).
         """
         import os
 

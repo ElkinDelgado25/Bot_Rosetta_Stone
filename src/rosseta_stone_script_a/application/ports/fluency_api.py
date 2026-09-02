@@ -48,11 +48,13 @@ class FluencyApiPort(ABC):
     ) -> FluencyProgressResult:
         """Submit usage-time telemetry (AddUsageOverhead mutation).
 
-        **Inferred, unverified schema** — see docs/FLUENCY_BUILDER.md. The real
-        capture only recorded that this mutation exists and fires alongside
-        AddProgress; its exact fields were never captured. Best-effort only:
-        lesson completion is confirmed to work through ``add_progress`` alone,
-        so callers must treat failures here as non-fatal.
+        Schema captured from the real player (see docs/FLUENCY_BUILDER.md): the
+        mutation takes ``$messages`` only — no ``userId`` — and ``usageOverhead``
+        returns a scalar, so it takes no selection set. Each message carries
+        ``id``, ``userAgent``, ``learningContext``, ``durationMs`` and
+        ``endTimestamp``. Still best-effort: lesson completion is confirmed to
+        work through ``add_progress`` alone, so callers treat failures here as
+        non-fatal.
         """
         ...
 

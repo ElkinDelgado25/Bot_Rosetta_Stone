@@ -85,7 +85,8 @@ class _FakeApi:
     async def add_usage_overhead(self, authorization, user_id, messages):
         self.add_usage_overhead_calls.append(messages)
         return FluencyProgressResult(
-            success=True, status=200, activity_id=messages[0]["activityId"],
+            success=True, status=200,
+            course_id=messages[0]["learningContext"],
             message_count=len(messages),
         )
 
@@ -227,11 +228,11 @@ class _SpeechSpy:
 
 
 class _RaisingUsageOverheadApi(_FakeApi):
-    """The inferred AddUsageOverhead mutation can fail (wrong schema guess)."""
+    """AddUsageOverhead es telemetría: si revienta, la lección ya está enviada."""
 
     async def add_usage_overhead(self, authorization, user_id, messages):
         self.add_usage_overhead_calls.append(messages)
-        raise RuntimeError("gaia-server rejected the guessed schema")
+        raise RuntimeError("gaia-server rejected the message")
 
 
 class TestCompleteFluencyOrchestrator:
@@ -248,7 +249,7 @@ class TestCompleteFluencyOrchestrator:
         )
         _run(orch)
         assert len(api.add_usage_overhead_calls) == 1
-        assert api.add_usage_overhead_calls[0][0]["activityId"] == "a1"
+        assert api.add_usage_overhead_calls[0][0]["learningContext"] == "c1"
 
     def test_usage_overhead_failure_does_not_block_completion(self):
         api = _RaisingUsageOverheadApi(["seq-a"])
@@ -257,7 +258,7 @@ class TestCompleteFluencyOrchestrator:
         )
         _run(orch)
         # The activity itself still landed via add_progress despite the
-        # inferred mutation raising.
+        # telemetry call raising.
         assert len(api.add_progress_calls) == 1
         assert len(api.add_usage_overhead_calls) == 1
 

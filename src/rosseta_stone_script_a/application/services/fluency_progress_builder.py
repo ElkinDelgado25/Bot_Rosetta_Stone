@@ -84,17 +84,18 @@ class FluencyProgressBuilder:
         activity: FluencyActivity,
         duration_ms: int,
     ) -> Dict[str, Any]:
-        """Build one inferred UsageOverheadMessage for a completed activity.
+        """Build one UsageOverheadMessage for a completed activity.
 
-        Unverified schema (see FluencyApiPort.add_usage_overhead) — carries only
-        the identity fields ProgressMessage itself uses plus the activity's
-        total duration, since usage-time telemetry has no answer to report.
+        Schema captured from the real player (traza de 01-09-2026): the message
+        carries **only** these five fields. It is deliberately not shaped like a
+        ProgressMessage — there is no ``sequenceId`` and no ``activityId``, and
+        the course travels as ``learningContext``. ``id`` is the message's own
+        identifier, one per message, not the activity's.
         """
         return {
+            "id": str(uuid.uuid4()),
             "userAgent": self.user_agent,
-            "courseId": sequence.course_id,
-            "sequenceId": sequence.sequence_id,
-            "activityId": activity.activity_id,
+            "learningContext": sequence.course_id,
             "durationMs": duration_ms,
             "endTimestamp": self._now_iso(),
         }
