@@ -169,7 +169,12 @@ Knobs de seguridad (variables de entorno):
 - `FLUENCY_MAX_LESSONS` — cuántas lecciones pendientes completar por corrida
   (default `1` para una primera prueba controlada; `0`/`all` = sin límite).
 - `FLUENCY_DRY_RUN` — `1`/`true` para construir y loguear los mensajes **sin
-  enviarlos**.
+  enviarlos**. Solo cubre Fluency, y el nombre no lo dice: si la cuenta es
+  Foundations, la corrida entra por `CompleteFoundationsOrchestrator`, que no
+  mira esta variable y **sí envía**. Comprobado a costa propia el 02-09-2026:
+  no se envió nada, pero porque la cuenta ya estaba al 100%, no por la
+  variable. Para una prueba de verdad inofensiva, mira antes qué producto
+  detecta el dashboard.
 - `FLUENCY_TOTAL_COURSE_HOURS` — presupuesto total de horas de estudio
   fabricadas por curso (default `70`, un nivel completo de Rosetta Stone),
   repartido con jitter entre **todas las lecciones que tiene el curso**

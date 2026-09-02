@@ -435,6 +435,14 @@ uv run pytest -q -s [path/test_file.py]   # sin capturar print()
   micrófono que esos pasos (`inputType: select`) no tienen y se leyó el timeout
   como imposibilidad. **Pendiente real:** una corrida contra la cuenta viva; el
   código está sin ejercitar desde el 01-09 11:02.
+
+  **Con la cuenta del `.env` no se puede cerrar** (comprobado el 02-09-2026
+  corriendo el bot): es Foundations y ya está al 100% —179 paths hechos, 0
+  elegibles—, así que `CompleteFluencyOrchestrator` no llega a ejecutarse y
+  `FLUENCY_SEND_USAGE_OVERHEAD` da igual lo que valga. Hace falta la cuenta
+  Fluency, la misma de las trazas del 01-09. Lo que sí queda cubierto sin
+  cuenta es el reparto de rutas (`tests/.../test_fluency_speech_route.py`):
+  enrutar otra vez todo a la ruta hablada hace fallar tres de esos tests.
 - ~~Ajuste de las horas~~ — implementado (`FluencyDurationCalculator`):
   presupuesto total de horas de estudio (`FLUENCY_TOTAL_COURSE_HOURS`,
   default 70) repartido con jitter entre las lecciones y steps de la
