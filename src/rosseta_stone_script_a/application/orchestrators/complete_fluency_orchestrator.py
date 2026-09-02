@@ -20,7 +20,7 @@ from rosseta_stone_script_a.application.services.fluency_progress_builder import
     FluencyProgressBuilder,
 )
 from rosseta_stone_script_a.domain.entities.fluency_catalog import FluencyCatalog
-from rosseta_stone_script_a.domain.errors import SessionCaptureIncomplete
+from rosseta_stone_script_a.domain.errors import BrowserGone, SessionCaptureIncomplete
 from rosseta_stone_script_a.infrastructure.state import RunProgressState
 from rosseta_stone_script_a.shared import events
 
@@ -131,9 +131,29 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
 
         touched = []
         for course, seq_ref in pending:
-            sent = await self._complete_lesson(
-                authorization, user_id, locale, course, seq_ref
-            )
+            try:
+                sent = await self._complete_lesson(
+                    authorization, user_id, locale, course, seq_ref
+                )
+            except BrowserGone as exc:
+                # Se para aquí a propósito. Sin esto, la corrida del 02-09 a
+                # las 10:29 siguió pidiendo lecciones con el navegador ya
+                # muerto y acabó en un traceback que no nombraba la causa.
+                #
+                # Lo enviado se guarda antes de volver a lanzar, pero **se
+                # vuelve a lanzar**: una corrida que se quedó a medias no es un
+                # éxito, y salir con 0 es justo el silencio que este proyecto
+                # decidió no tener ("sesión incompleta = error, no silencio").
+                # Verificar tampoco tiene sentido: hace falta el navegador.
+                self.logger.error("%s", exc)
+                self.logger.info(
+                    "  Se envió lo de %d lecciones antes de perderlo; el resto "
+                    "queda pendiente para la próxima corrida.",
+                    len(touched),
+                )
+                if self._state:
+                    self._state.save()
+                raise
             touched.append((course, seq_ref, sent))
 
         if self._state:

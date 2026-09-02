@@ -4,8 +4,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from playwright.async_api import APIRequestContext
+from playwright._impl._errors import TargetClosedError
 
 from rosseta_stone_script_a.application.ports.fluency_api import FluencyApiPort
+from rosseta_stone_script_a.domain.errors import BrowserGone
 from rosseta_stone_script_a.domain.entities.fluency_catalog import FluencyCatalog
 from rosseta_stone_script_a.domain.entities.fluency_sequence import FluencySequence
 from rosseta_stone_script_a.domain.values.fluency_progress_result import (
@@ -144,9 +146,17 @@ class PlaywrightFluencyApiAdapter(FluencyApiPort, LoggingMixin):
             "query": query,
         }
         self.logger.info(f"Fluency GraphQL {operation} variables={variables}")
-        response = await self.request_context.post(
-            GAIA_GRAPHQL_URL, headers=self._headers(authorization), data=payload
-        )
+        # El contexto de peticiones vive dentro del navegador: si el navegador
+        # se ha ido, esto revienta con TargetClosedError. Se traduce aquí
+        # porque ``application/`` no puede importar Playwright, y sin traducir
+        # subía crudo hasta la CLI como un traceback que no mencionaba el
+        # navegador por ninguna parte.
+        try:
+            response = await self.request_context.post(
+                GAIA_GRAPHQL_URL, headers=self._headers(authorization), data=payload
+            )
+        except TargetClosedError as exc:
+            raise BrowserGone(f"llamando a {operation}") from exc
 
         if not response.ok:
             body = await response.text()
@@ -209,6 +219,12 @@ class PlaywrightFluencyApiAdapter(FluencyApiPort, LoggingMixin):
             response = await self.request_context.post(
                 GAIA_GRAPHQL_URL, headers=self._headers(authorization), data=payload
             )
+        except TargetClosedError as exc:
+            # Un navegador muerto no es "esta actividad falló": es que ya no va
+            # a funcionar ninguna. Devolverlo como fallo normal hacía que la
+            # corrida siguiera recorriendo cientos de actividades anotando
+            # fallos, en vez de parar y guardar lo que sí se envió.
+            raise BrowserGone("enviando AddProgress") from exc
         except Exception as exc:
             self.logger.error(f"AddProgress request error: {exc}")
             return FluencyProgressResult(

@@ -31,6 +31,28 @@ class SessionCaptureIncomplete(RosettaError):
         )
 
 
+class BrowserGone(RosettaError):
+    """El navegador se cerró mientras la corrida seguía usándolo.
+
+    Pasa de verdad: en la corrida del 02-09-2026 a las 10:29 el navegador
+    desapareció a mitad de una conversación. Cada llamada posterior reventaba
+    con ``TargetClosedError`` de Playwright hasta que el traceback salió por la
+    CLI y el proceso murió con código 1 — perdiendo las lecciones que faltaban
+    y sin decir en ninguna línea que lo que se había caído era el navegador.
+
+    Es un final legítimo, no un error de programación: lo que queda por hacer
+    sigue pendiente para la próxima corrida y lo ya enviado está guardado.
+    """
+
+    def __init__(self, causa: str | None = None) -> None:
+        self.causa = causa
+        detalle = f" ({causa})" if causa else ""
+        super().__init__(
+            f"El navegador se cerró antes de terminar la corrida{detalle}. "
+            "Lo enviado hasta ahí queda guardado; el resto sigue pendiente."
+        )
+
+
 class ExamAnswerUnavailable(RosettaError):
     """No verified or deterministic answer exists for an exam question."""
 
