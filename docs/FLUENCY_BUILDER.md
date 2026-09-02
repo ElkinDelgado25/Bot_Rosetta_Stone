@@ -566,6 +566,25 @@ incompleta tiene **exactamente una** actividad frenándola, y no siempre en 0:
 hay 4,8%, 5,6% y 5,9%, que es un paso de 17-21. Una conversación a medias, no
 una rechazada.
 
+### Lo que dicen las trazas sobre el tiempo perdido
+
+Comparando `speech_trace_1c2890c6` (08:05, antes de los arreglos) con
+`speech_trace_51a0d93e` (10:23, después), por actividad:
+
+| Espera | Antes | Después |
+|---|---|---|
+| `__rosettaSreReady` | 15 s, y una vez por paso | 15 s una sola vez (se recuerda que no avisa) |
+| Audio de referencia | 6 × 8 s | 6 × 4 s |
+| Sonda de respuesta marcada | 5 × 2 s | 1 × 0,5 s |
+| Micrófono habilitado | **90 s y muere** | 3 s y sigue |
+
+Y lo que quedaba vivo: en la traza nueva, los **únicos** dos timeouts de 90 s
+son los dos de `!audio_playing` — 180 s muertos en una sola actividad, uno de
+ellos matándola. Es exactamente lo que arreglan los dos cambios del 02-09
+(condición previa con sonda corta en `_click_speech_button`, y sonda corta
+también por defecto en `_wait_for_all_audio_to_stop`). O el reproductor se
+calla enseguida o no se calla: darle minuto y medio más no cambia el final.
+
 ## Resuelto
 
 - Auth de `gaia-server`: **Bearer token** (un UUID, no un JWT `eyJ`), capturado en

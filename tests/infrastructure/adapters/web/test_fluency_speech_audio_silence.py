@@ -152,3 +152,19 @@ class TestPulsarElMicrofonoConAudioAtascado:
         asyncio.run(speech._click_speech_button())
         de_audio = [t for e, t in page.esperas if "audio_playing" in e]
         assert de_audio == [speech.probe_timeout_ms]
+
+
+class TestNoSeEsperaNoventaSegundosPorNada:
+    """Medido en la traza de la actividad del 02-09-2026 a las 10:23.
+
+    La condición ``!audio_playing`` se agotó **dos veces** con el timeout
+    largo: 180 s de espera muerta en una sola actividad, terminando igual que
+    si no se hubiera esperado. O se calla enseguida o no se calla.
+    """
+
+    def test_por_defecto_usa_la_sonda_corta_no_los_noventa_segundos(self):
+        page = _PageQueNoSeCalla()
+        speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
+        asyncio.run(speech._wait_for_all_audio_to_stop())
+        assert page.esperas[0][1] == speech.probe_timeout_ms
+        assert page.esperas[0][1] < speech.timeout_ms

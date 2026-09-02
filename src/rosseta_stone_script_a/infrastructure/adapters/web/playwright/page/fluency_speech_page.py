@@ -1604,11 +1604,19 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         se puede seguir es el botón, y él tiene su propia espera con su propio
         diagnóstico. Esto era la única espera de audio que sí mataba la
         actividad, y las dos miran exactamente la misma condición.
+
+        Por defecto va con la sonda corta, no con los 90 s. En la traza de la
+        actividad del 02-09 a las 10:23 esta condición se agotó **dos veces**
+        con el timeout largo: 180 s de espera muerta en una sola actividad, y
+        acabando igual que si no se hubiera esperado. O se calla enseguida o no
+        se calla: darle un minuto y medio más no cambia el final.
         """
         try:
             await self.page.wait_for_function(
                 "() => !document.querySelector('[data-qa=audio_playing]')",
-                timeout=timeout_ms if timeout_ms is not None else self.timeout_ms,
+                timeout=(
+                    timeout_ms if timeout_ms is not None else self.probe_timeout_ms
+                ),
             )
         except PlaywrightTimeoutError:
             self.logger.debug("  El reproductor sigue sonando; se continúa")
