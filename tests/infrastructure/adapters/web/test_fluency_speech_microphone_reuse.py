@@ -12,10 +12,10 @@ import asyncio
 import pytest
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page import (
     fluency_speech_page as modulo,
 )
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
 )
 
@@ -100,3 +100,4 @@ class TestRequestCounter:
 
         fuente = inspect.getsource(PlaywrightFluencySpeechPage._complete_visible_step)
         assert "__rosettaMicReady = false" not in fuente
+

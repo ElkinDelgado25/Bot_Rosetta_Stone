@@ -18,16 +18,16 @@ import asyncio
 
 import pytest
 
-from rosseta_stone_script_a.application.orchestrators.complete_fluency_orchestrator import (
+from Resolucion_script_rosseta.aplicacion.orchestrators.complete_fluency_orchestrator import (
     CompleteFluencyOrchestrator,
 )
-from rosseta_stone_script_a.domain.entities.fluency_catalog import FluencyCatalog
-from rosseta_stone_script_a.domain.entities.fluency_course import (
+from Resolucion_script_rosseta.dominio.entities.fluency_catalog import FluencyCatalog
+from Resolucion_script_rosseta.dominio.entities.fluency_course import (
     FluencyCourse,
     FluencySequenceRef,
 )
-from rosseta_stone_script_a.domain.entities.fluency_sequence import FluencySequence
-from rosseta_stone_script_a.domain.errors import BrowserGone
+from Resolucion_script_rosseta.dominio.entities.fluency_sequence import FluencySequence
+from Resolucion_script_rosseta.dominio.errors import BrowserGone
 
 
 class _ApiQueSePierde:
@@ -118,3 +118,4 @@ class TestNavegadorPerdido:
         with pytest.raises(BrowserGone):
             _correr(_orquestador(api, _EstadoEspia()))
         assert api.verificaciones == 0
+

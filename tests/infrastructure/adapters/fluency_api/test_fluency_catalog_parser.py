@@ -7,7 +7,7 @@ Fixtures mirror the real shapes of getCoursesAndProgress observed in the HAR:
 - a course may have no progress entry (stays at 0).
 """
 
-from rosseta_stone_script_a.infrastructure.adapters.fluency_api.fluency_catalog_parser import (
+from Resolucion_script_rosseta.infraestructura.adapters.fluency_api.fluency_catalog_parser import (
     FluencyCatalogParser,
 )
 
@@ -115,3 +115,4 @@ class TestFluencyCatalogParser:
 
     def test_empty_response_yields_empty_catalog(self):
         assert FluencyCatalogParser.parse({"data": {}}).courses == []
+

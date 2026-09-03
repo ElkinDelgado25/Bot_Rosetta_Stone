@@ -10,9 +10,9 @@ from collections import deque
 
 import pytest
 
-from rosseta_stone_script_a.presentation.web.backends import RunOutcome
-from rosseta_stone_script_a.presentation.web.profiles import ProfileStore
-from rosseta_stone_script_a.presentation.web.run_manager import (
+from Resolucion_script_rosseta.presentacion.web.backends import RunOutcome
+from Resolucion_script_rosseta.presentacion.web.profiles import ProfileStore
+from Resolucion_script_rosseta.presentacion.web.run_manager import (
     RunAlreadyActive,
     RunManager,
     RunStatus,
@@ -379,7 +379,7 @@ def test_progress_reads_the_state_file(tmp_path, backend):
 
 def test_a_new_profile_completes_every_pending_lesson(tmp_path, backend):
     """El motor topa en 1 lección por corrida; la UI quiere todas."""
-    from rosseta_stone_script_a.presentation.web.backends import (
+    from Resolucion_script_rosseta.presentacion.web.backends import (
         _run_config,
         fluency_limit_env,
     )
@@ -397,7 +397,7 @@ def test_a_new_profile_completes_every_pending_lesson(tmp_path, backend):
 
 
 def test_an_explicit_limit_is_respected(tmp_path, backend):
-    from rosseta_stone_script_a.presentation.web.backends import fluency_limit_env
+    from Resolucion_script_rosseta.presentacion.web.backends import fluency_limit_env
 
     store, _ = _manager(tmp_path, backend)
     profile = store.create(name="U", email="u@e.com", password="x")
@@ -543,7 +543,7 @@ def test_the_worker_inherits_the_engine_knobs(monkeypatch):
     Sin esto, FLUENCY_SPEECH_TRACE=1 en el servidor no hacía nada: el worker
     arranca con un entorno fijo y no ve el de quien lo lanzó.
     """
-    from rosseta_stone_script_a.presentation.web.backends import worker_passthrough_env
+    from Resolucion_script_rosseta.presentacion.web.backends import worker_passthrough_env
 
     monkeypatch.setenv("FLUENCY_SPEECH_TRACE", "1")
     monkeypatch.setenv("FLUENCY_BROWSER_EXTRA_TYPES", "PronunciationPhoneme")
@@ -557,7 +557,8 @@ def test_the_worker_inherits_the_engine_knobs(monkeypatch):
 
 
 def test_an_empty_knob_is_not_passed_through(monkeypatch):
-    from rosseta_stone_script_a.presentation.web.backends import worker_passthrough_env
+    from Resolucion_script_rosseta.presentacion.web.backends import worker_passthrough_env
 
     monkeypatch.setenv("FLUENCY_SPEECH_TRACE", "   ")
     assert "FLUENCY_SPEECH_TRACE" not in worker_passthrough_env()
+

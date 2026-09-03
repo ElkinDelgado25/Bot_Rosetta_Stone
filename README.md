@@ -149,7 +149,7 @@ curl http://127.0.0.1:8000/api/health
 ## Opción C · CLI, una sola cuenta
 
 ```bash
-uv run python -m rosseta_stone_script_a
+uv run python -m Resolucion_script_rosseta
 ```
 
 Lee todo del `.env`. Si no existe, la primera ejecución lo crea preguntando
@@ -159,7 +159,7 @@ opciones.
 Sin `uv`, con el entorno ya sincronizado:
 
 ```bash
-.\.venv\Scripts\python.exe -m rosseta_stone_script_a
+.\.venv\Scripts\python.exe -m Resolucion_script_rosseta
 ```
 
 **Códigos de salida** (útiles si lo programas en una tarea automática):
@@ -175,20 +175,22 @@ Sin `uv`, con el entorno ya sincronizado:
 
 ## Variables de entorno
 
-Van en el `.env` (o en el `environment:` del compose).
+Van en el `.env` (o en el `environment:` del compose). Los nombres nuevos están
+en español; los antiguos siguen funcionando como alias para no romper
+instalaciones ya hechas.
 
 | Variable | Por defecto | Para qué |
 |---|---|---|
-| `ROSETTA_EMAIL` / `ROSETTA_PASSWORD` | — | Credenciales de la CLI |
-| `ROSETTA_HOME` | directorio actual | Dónde viven `.env`, `profiles.json`, `state/` y `logs/` |
-| `ROSETTA_WEB_HOST` | `127.0.0.1` | Interfaz donde escucha la web |
-| `ROSETTA_WEB_PORT` | `8000` | Puerto |
-| `ROSETTA_WEB_TOKEN` | *(vacío)* | Token compartido. Vacío = API abierta |
-| `ROSETTA_RUN_BACKEND` | automático | `docker` o `in-process`, para forzar el modo |
-| `BROWSER_HEADLESS` | `false` | `true` para no ver la ventana del navegador |
-| `LOG_LEVEL` | `INFO` | `DEBUG` para diagnosticar |
-| `FLUENCY_MAX_LESSONS` | `1` en la CLI, `all` desde la web | Lecciones de Fluency por corrida |
-| `FLUENCY_DRY_RUN` | `false` | `1` para construir los envíos sin mandarlos |
+| `ROSETTA_CORREO` / `ROSETTA_CLAVE` | — | Credenciales de la CLI |
+| `ROSETTA_RAIZ` | directorio actual | Dónde viven `.env`, `profiles.json`, `state/` y `logs/` |
+| `ROSETTA_HOST_WEB` | `127.0.0.1` | Interfaz donde escucha la web |
+| `ROSETTA_PUERTO_WEB` | `8000` | Puerto |
+| `ROSETTA_TOKEN_WEB` | *(vacío)* | Token compartido. Vacío = API abierta |
+| `ROSETTA_BACKEND_EJECUCION` | automático | `docker` o `in-process`, para forzar el modo |
+| `NAVEGADOR_SIN_GUI` | `false` | `true` para no ver la ventana del navegador |
+| `NIVEL_LOG` | `INFO` | `DEBUG` para diagnosticar |
+| `FLUENCY_LECCIONES_MAX` | `1` en la CLI, `all` desde la web | Lecciones de Fluency por corrida |
+| `FLUENCY_EJECUCION_DE_PRUEBA` | `false` | `1` para construir los envíos sin mandarlos |
 
 ---
 
@@ -203,7 +205,7 @@ la UI la pedirá en cada ejecución.
 propósito. La API puede lanzar corridas con las credenciales ya guardadas, y el
 contenedor web monta `docker.sock` para crear los workers — quien controle esa
 web controla el daemon de Docker, que en la práctica equivale a root en la
-máquina. Si necesitas exponerlo, define `ROSETTA_WEB_TOKEN` primero.
+máquina. Si necesitas exponerlo, define `ROSETTA_TOKEN_WEB` primero.
 
 Los tokens de sesión que captura cada corrida se guardan por usuario en
 `state/sessions/<id>.json` con permisos 0600, y la API nunca los devuelve
@@ -244,18 +246,18 @@ Compilar el `.exe`:
 uv run --group dev python build.py
 ```
 
-Sale en `dist/rosseta-script-a.exe`. Copia el `.exe` a una carpeta y pon un
+Sale en `dist/Resolucion-script-rossetta.exe`. Copia el `.exe` a una carpeta y pon un
 `.env` **en esa misma carpeta** (lee el suyo, no el del directorio actual). El
 binario **no incluye la interfaz web**, a propósito, para no arrastrar FastAPI.
 
 ### Estructura
 
 ```
-src/rosseta_stone_script_a/
-├── domain/           Entidades, valores y errores del dominio
-├── application/      Orquestadores, casos de uso, puertos y servicios
-├── infrastructure/   Adaptadores (Playwright, APIs), estado, configuración
-└── presentation/
+src/Resolucion_script_rosseta/
+├── dominio/          Entidades, valores y errores del dominio
+├── aplicacion/       Orquestadores, casos de uso, puertos y servicios
+├── infraestructura/  Adaptadores (Playwright, APIs), estado, configuración
+└── presentacion/
     ├── cli.py        Entrada de terminal, una cuenta
     ├── worker.py     Una corrida dentro de un contenedor efímero
     └── web/          Interfaz web multi-usuario (FastAPI + un HTML)

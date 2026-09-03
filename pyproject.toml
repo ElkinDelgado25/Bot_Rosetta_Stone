@@ -1,5 +1,5 @@
 [project]
-name = "rosseta-stone-script-a"
+name = "Resolucion-script-rossetta"
 version = "0.1.0"
 description = "Automatiza la navegación y finalización de lecciones en Rosetta Stone, con reportes de avance y cálculo de rutas óptimas de aprendizaje."
 readme = "README.md"
@@ -26,8 +26,8 @@ web = [
 Repository = "https://github.com/ElkinDelgado25/Bot_Rosetta_Stone"
 
 [project.scripts]
-rosseta-script-a = "rosseta_stone_script_a.__main__:main"
-rosseta-web = "rosseta_stone_script_a.presentation.web.server:main"
+Resolucion-script-rossetta = "Resolucion_script_rosseta.__main__:main"
+rosseta-web = "Resolucion_script_rosseta.presentacion.web.server:main"
 
 [dependency-groups]
 dev = [
@@ -51,8 +51,9 @@ where = ["src"]
 
 # El HTML de la UI no es código: sin esto no viaja en una instalación del paquete.
 [tool.setuptools.package-data]
-"rosseta_stone_script_a.presentation.web" = ["static/*"]
+"Resolucion_script_rosseta.presentacion.web" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+

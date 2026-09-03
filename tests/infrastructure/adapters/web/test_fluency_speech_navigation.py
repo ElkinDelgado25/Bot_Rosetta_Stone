@@ -10,7 +10,7 @@ import asyncio
 
 import pytest
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
 )
 
@@ -114,3 +114,4 @@ class TestOpenLesson:
     def test_a_course_that_is_not_there_is_an_error(self):
         with pytest.raises(RuntimeError, match="curso"):
             _open(["Otro curso"], ["Registration"])
+

@@ -9,13 +9,13 @@ import asyncio
 
 import pytest
 
-from rosseta_stone_script_a.application.orchestrators.complete_fluency_orchestrator import (
+from Resolucion_script_rosseta.aplicacion.orchestrators.complete_fluency_orchestrator import (
     CompleteFluencyOrchestrator,
 )
-from rosseta_stone_script_a.application.orchestrators.complete_foundations_orchestrator import (
+from Resolucion_script_rosseta.aplicacion.orchestrators.complete_foundations_orchestrator import (
     CompleteFoundationsOrchestrator,
 )
-from rosseta_stone_script_a.domain.errors import SessionCaptureIncomplete
+from Resolucion_script_rosseta.dominio.errors import SessionCaptureIncomplete
 
 COMPLETE_SESSION = {
     "authorization": "eyJhbGciOiJIUzI1NiJ9.x.y",
@@ -93,3 +93,4 @@ def test_fluency_raises_without_the_gaia_token():
     assert exc_info.value.missing == ["authorization"]
     assert "Fluency Builder" in str(exc_info.value)
     assert api.calls == 0
+

@@ -10,7 +10,7 @@ import asyncio
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
 )
 
@@ -252,3 +252,4 @@ class TestPlayReferenceAudio:
         speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
         asyncio.run(speech._wait_for_recognizer())
         assert "__rosettaSreReady" in page.consultado[-1]
+

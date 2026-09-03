@@ -7,10 +7,10 @@ did before this feature existed.
 
 import asyncio
 
-from rosseta_stone_script_a.application.orchestrators.open_fundations import (
+from Resolucion_script_rosseta.aplicacion.orchestrators.open_fundations import (
     OpenFundations,
 )
-from rosseta_stone_script_a.domain.values.learner_hours import LearnerHours
+from Resolucion_script_rosseta.dominio.values.learner_hours import LearnerHours
 
 
 class _Dashboard:
@@ -76,3 +76,4 @@ class TestLearnerHoursValue:
         )
         assert hours.total_hours == 0.0
         assert hours.elearning_hours == 0.0
+

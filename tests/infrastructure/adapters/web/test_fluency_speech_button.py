@@ -11,7 +11,7 @@ import asyncio
 import pytest
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
     _MicNeverCalibrated,
 )
@@ -138,3 +138,4 @@ class TestRuidoDeCalibracion:
         assert "audio_playing" in page.waits[0]
         assert "SpeechButton" in page.waits[1]
         assert page.button.clicked
+

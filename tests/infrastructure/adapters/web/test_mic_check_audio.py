@@ -8,10 +8,10 @@ la corrida sigue igual con el tono.
 import asyncio
 import base64
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page import (
     fluency_speech_page as modulo,
 )
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
 )
 
@@ -33,7 +33,7 @@ def _cargar(page, tmp_path, monkeypatch, nombre="mic_check.wav", datos=b"RIFFtes
     if nombre:
         (carpeta / nombre).write_bytes(datos)
     monkeypatch.setattr(
-        "rosseta_stone_script_a.infrastructure.core.get_base_dir", lambda: tmp_path
+        "Resolucion_script_rosseta.infraestructura.core.get_base_dir", lambda: tmp_path
     )
     speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
     asyncio.run(speech._load_mic_check_audio())
@@ -66,3 +66,4 @@ class TestMicCheckPlayback:
     def test_the_recording_loops(self):
         # La comprobación dura más que la grabación.
         assert "fuente.loop = true" in modulo._VIRTUAL_MIC_SCRIPT
+

@@ -20,8 +20,8 @@ import asyncio
 import pytest
 from playwright._impl._errors import TargetClosedError
 
-from rosseta_stone_script_a.domain.errors import BrowserGone
-from rosseta_stone_script_a.infrastructure.adapters.fluency_api.playwright_fluency_api import (
+from Resolucion_script_rosseta.dominio.errors import BrowserGone
+from Resolucion_script_rosseta.infraestructura.adapters.fluency_api.playwright_fluency_api import (
     PlaywrightFluencyApiAdapter,
 )
 
@@ -74,3 +74,4 @@ class TestNavegadorMuerto:
         )
         assert resultado.success is False
         assert resultado.activity_id == "a1"
+

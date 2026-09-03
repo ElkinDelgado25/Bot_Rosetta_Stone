@@ -8,7 +8,7 @@ of activities — so only the ones worth looking at are kept.
 import asyncio
 from pathlib import Path
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
 )
 
@@ -75,3 +75,4 @@ class TestSpeechTracing:
         except RuntimeError:
             pass
         assert page.context.tracing.stopped_to
+

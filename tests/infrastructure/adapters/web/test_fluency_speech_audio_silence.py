@@ -15,7 +15,7 @@ import asyncio
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
 )
 
@@ -173,3 +173,45 @@ class TestNoSeEsperaNoventaSegundosPorNada:
         asyncio.run(speech._wait_for_all_audio_to_stop())
         assert page.esperas[0][1] == speech.probe_timeout_ms
         assert page.esperas[0][1] < speech.timeout_ms
+
+
+class TestElAudioInyectadoNoDebeHundirLaRespuesta:
+    def test_un_timeout_al_esperar_el_fin_del_audio_se_traga_y_se_sigue(self):
+        class _Page:
+            async def wait_for_function(self, expression, timeout=None, arg=None):
+                return None
+
+            async def evaluate(self, expression, *args):
+                return None
+
+        speech = PlaywrightFluencySpeechPage(_Page())  # type: ignore[arg-type]
+
+        async def _click_speech_button():
+            return None
+
+        async def _dismiss_microphone_check():
+            return False
+
+        async def _wait_for_microphone(_antes):
+            return None
+
+        async def _wait_until_recording():
+            return None
+
+        async def _wait(expression, description, arg=None, timeout_ms=None):
+            if "MicPlaybackDone" in expression:
+                raise PlaywrightTimeoutError("audio atascado")
+            return None
+
+        async def _submit_verdict():
+            return "aceptada"
+
+        speech._click_speech_button = _click_speech_button  # type: ignore[method-assign]
+        speech._dismiss_microphone_check = _dismiss_microphone_check  # type: ignore[method-assign]
+        speech._wait_for_microphone = _wait_for_microphone  # type: ignore[method-assign]
+        speech._wait_until_recording = _wait_until_recording  # type: ignore[method-assign]
+        speech._wait = _wait  # type: ignore[method-assign]
+        speech._submit_verdict = _submit_verdict  # type: ignore[method-assign]
+
+        assert asyncio.run(speech._speak_until_accepted(b"audio", 1)) is True
+

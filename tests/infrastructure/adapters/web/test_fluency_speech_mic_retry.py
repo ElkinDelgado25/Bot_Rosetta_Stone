@@ -10,7 +10,7 @@ calibración, así que la conversación se reintenta en vez de perderse.
 
 import asyncio
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
     _MicNeverCalibrated,
 )
@@ -83,3 +83,4 @@ class TestReintentoDeMicrofono:
         # Con 0 reintentos, un solo intento con el timeout entero.
         solo = _EspiaReintento([True], mic_retries=0)
         assert solo.mic_enable_timeout_ms == solo.timeout_ms
+

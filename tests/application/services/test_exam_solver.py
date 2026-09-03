@@ -1,11 +1,11 @@
 import pytest
-from rosseta_stone_script_a.application.services.exam_solver import ExamSolver
-from rosseta_stone_script_a.domain.entities.exam import (
+from Resolucion_script_rosseta.aplicacion.services.exam_solver import ExamSolver
+from Resolucion_script_rosseta.dominio.entities.exam import (
     ExamActivity,
     ExamOption,
     ExamStep,
 )
-from rosseta_stone_script_a.domain.errors import ExamAnswerUnavailable
+from Resolucion_script_rosseta.dominio.errors import ExamAnswerUnavailable
 
 
 def test_solver_uses_verified_answers():
@@ -90,3 +90,4 @@ def test_solver_strict_mode_stops_instead_of_guessing():
 
     with pytest.raises(ExamAnswerUnavailable):
         solver.solve_step(step)
+

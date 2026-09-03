@@ -8,7 +8,7 @@ the first user had completed and finished "successfully" having sent nothing.
 import asyncio
 import json
 
-from rosseta_stone_script_a.application.orchestrators.complete_fluency_orchestrator import (
+from Resolucion_script_rosseta.aplicacion.orchestrators.complete_fluency_orchestrator import (
     CompleteFluencyOrchestrator,
 )
 
@@ -103,7 +103,7 @@ def test_the_engine_default_is_one_lesson_but_all_is_selectable(monkeypatch):
     DependencyFactory lee FLUENCY_MAX_LESSONS y su default es 1: completaba una
     lección y paraba. La capa web pasa "all" explícitamente.
     """
-    from rosseta_stone_script_a.presentation.dependency_factory import DependencyFactory
+    from Resolucion_script_rosseta.presentacion.dependency_factory import DependencyFactory
 
     class _Session:
         _page = type("P", (), {"request": object()})()
@@ -118,3 +118,4 @@ def test_the_engine_default_is_one_lesson_but_all_is_selectable(monkeypatch):
 
     monkeypatch.setenv("FLUENCY_MAX_LESSONS", "5")
     assert factory.create_complete_fluency_orchestrator().max_lessons == 5
+

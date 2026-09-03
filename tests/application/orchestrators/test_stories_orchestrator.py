@@ -8,13 +8,13 @@ already credited.
 
 import asyncio
 
-from rosseta_stone_script_a.application.orchestrators.stories_orchestrator import (
+from Resolucion_script_rosseta.aplicacion.orchestrators.stories_orchestrator import (
     StoriesOrchestrator,
 )
-from rosseta_stone_script_a.application.services.stories_session_capturer import (
+from Resolucion_script_rosseta.aplicacion.services.stories_session_capturer import (
     StoriesSessionCapturer,
 )
-from rosseta_stone_script_a.application.services.stories_usage_planner import (
+from Resolucion_script_rosseta.aplicacion.services.stories_usage_planner import (
     StoriesUsagePlanner,
 )
 
@@ -146,3 +146,4 @@ class TestStoriesOrchestrator:
         except RuntimeError:
             pass
         assert len(monitor.removed) == 1
+

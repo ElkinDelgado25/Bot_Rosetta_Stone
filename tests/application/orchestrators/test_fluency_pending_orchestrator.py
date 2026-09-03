@@ -2,18 +2,18 @@
 
 import asyncio
 
-from rosseta_stone_script_a.application.orchestrators.complete_fluency_orchestrator import (
+from Resolucion_script_rosseta.aplicacion.orchestrators.complete_fluency_orchestrator import (
     fluency_activity_key,
 )
-from rosseta_stone_script_a.application.orchestrators.fluency_pending_orchestrator import (
+from Resolucion_script_rosseta.aplicacion.orchestrators.fluency_pending_orchestrator import (
     FluencyPendingOrchestrator,
 )
-from rosseta_stone_script_a.domain.entities.fluency_catalog import FluencyCatalog
-from rosseta_stone_script_a.domain.entities.fluency_course import (
+from Resolucion_script_rosseta.dominio.entities.fluency_catalog import FluencyCatalog
+from Resolucion_script_rosseta.dominio.entities.fluency_course import (
     FluencyCourse,
     FluencySequenceRef,
 )
-from rosseta_stone_script_a.infrastructure.state import RunProgressState
+from Resolucion_script_rosseta.infraestructura.state import RunProgressState
 
 
 class _ProgressApi:
@@ -59,3 +59,4 @@ def test_reconciles_remote_completed_activities_without_sending(tmp_path):
     assert state.is_done(fluency_activity_key("course-1", "lesson-1", "done-outside"))
     assert not state.is_done(fluency_activity_key("course-1", "lesson-1", "still-pending"))
     assert state.count_done_today() == 0
+

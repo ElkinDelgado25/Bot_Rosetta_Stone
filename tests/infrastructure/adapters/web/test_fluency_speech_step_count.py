@@ -10,7 +10,7 @@ import asyncio
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
 )
 
@@ -79,3 +79,4 @@ class TestStepCountEligiendo:
 
     def test_no_more_choices_means_the_conversation_ended(self):
         assert _hay_otro(_Page(aparece=False), modo="elegir") is False
+

@@ -15,10 +15,10 @@ ventana (``CalibrationWindow``) y lo que se espera es que se vaya.
 
 import asyncio
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page import (
     fluency_speech_page as modulo,
 )
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
 )
 
@@ -385,3 +385,4 @@ class TestFakeAudioDevice:
         guion = modulo._VIRTUAL_MIC_SCRIPT
         assert "enumerateDevices" in guion
         assert "audioinput" in guion
+

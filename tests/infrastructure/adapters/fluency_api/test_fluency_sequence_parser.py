@@ -7,7 +7,7 @@ answer ids, and read-only card steps have no ``correct`` field.
 
 import json
 
-from rosseta_stone_script_a.infrastructure.adapters.fluency_api.fluency_sequence_parser import (
+from Resolucion_script_rosseta.infraestructura.adapters.fluency_api.fluency_sequence_parser import (
     FluencySequenceParser,
 )
 
@@ -110,3 +110,4 @@ class TestFluencySequenceParser:
         ]
         seq = FluencySequenceParser.parse(_response(acts), course_id="c1")
         assert seq.activities[0].steps[0].correct_answer_ids == ["single-id"]
+

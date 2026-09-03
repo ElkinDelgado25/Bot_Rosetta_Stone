@@ -12,7 +12,7 @@ estaba mal era cuál se llamaba. Esto cubre exactamente eso.
 
 import asyncio
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
 )
 
@@ -159,3 +159,4 @@ class TestRutaDeLaConversacion:
         espia = _Espia(_Page(ya_completa=True), modo="elegir")
         assert _correr(espia) is True
         assert espia.elegidos == []
+

@@ -7,7 +7,7 @@ voz: por eso ``WithoutReco``, que se contesta pulsando y no hablando, también v
 por aquí.
 """
 
-from rosseta_stone_script_a.application.orchestrators.complete_fluency_orchestrator import (
+from Resolucion_script_rosseta.aplicacion.orchestrators.complete_fluency_orchestrator import (
     BROWSER_COMPLETED_TYPES,
     CompleteFluencyOrchestrator,
 )
@@ -36,3 +36,4 @@ class TestBrowserCompletedTypes:
 
     def test_an_empty_set_sends_everything_through_the_api(self):
         assert _orchestrator(browser_completed_types=()).browser_completed_types == ()
+

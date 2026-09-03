@@ -73,7 +73,7 @@ for e in insert_calls[1:]:
         answers[ans["activityStepId"]] = ans["contentId"]
 
 print(f"\n=== VERIFIED ANSWERS FROM HAR: {len(answers)} ===")
-out = Path(__file__).resolve().parents[1] / "src" / "rosseta_stone_script_a" / "infrastructure" / "adapters" / "exam_api" / "exam_verified_answers_har.json"
+out = Path(__file__).resolve().parents[1] / "src" / "Resolucion_script_rosseta" / "infraestructura" / "adapters" / "exam_api" / "exam_verified_answers_har.json"
 with open(out, "w", encoding="utf-8") as f:
     json.dump(answers, f, indent=2, sort_keys=True)
 print(f"Wrote {out}")

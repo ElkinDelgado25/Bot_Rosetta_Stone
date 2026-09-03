@@ -58,7 +58,7 @@ uv run playwright install chromium
 ### CLI — una cuenta, una pasada
 
 ```bash
-uv run python -m rosseta_stone_script_a
+uv run python -m Resolucion_script_rosseta
 ```
 
 Lee del `.env`. Primera ejecución lo crea interactivamente.
@@ -93,14 +93,14 @@ Abre http://127.0.0.1:8000. Cada corrida en su propio contenedor.
 uv run --group dev python build.py
 ```
 
-Sale en `dist/rosseta-script-a.exe` (CLI puro, sin web).
+Sale en `dist/Resolucion-script-rossetta.exe` (CLI puro, sin web).
 
 ---
 
 ## Estructura del Proyecto
 
 ```
-src/rosseta_stone_script_a/
+src/Resolucion_script_rosseta/
 ├── domain/               Entidades de negocio, valores, errores
 ├── application/
 │   ├── orchestrators/    Coordinadores de flujo (Foundations, Fluency, Exam)
@@ -309,7 +309,7 @@ Las dependencias están en `pyproject.toml` y fijadas en `uv.lock`. Requiere Pyt
 
 ### Namespace packages sin `__init__.py`
 
-`src/rosseta_stone_script_a/` y otros son namespace packages. `pyproject.toml` declara `packages.find` explícito.
+`src/Resolucion_script_rosseta/` y otros son namespace packages. `pyproject.toml` declara `packages.find` explícito.
 
 ### `ROSETTA_HOME` manda sobre el cwd
 

@@ -11,10 +11,10 @@ no por el score que se manda. El knob se queda como herramienta de diagnóstico,
 no como ruta de completación.
 """
 
-from rosseta_stone_script_a.application.orchestrators.complete_fluency_orchestrator import (
+from Resolucion_script_rosseta.aplicacion.orchestrators.complete_fluency_orchestrator import (
     BROWSER_COMPLETED_TYPES,
 )
-from rosseta_stone_script_a.presentation.dependency_factory import DependencyFactory
+from Resolucion_script_rosseta.presentacion.dependency_factory import DependencyFactory
 
 
 def _factory():
@@ -43,3 +43,4 @@ class TestBrowserCompletedTypes:
         tipos = _factory()._browser_completed_types()
         assert "TipoNuevo" in tipos
         assert "DialogueExpressionWithReco" not in tipos
+

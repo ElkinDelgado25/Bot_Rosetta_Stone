@@ -1,7 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.login_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.login_page import (
     LoginPage,
 )
 
@@ -34,3 +34,4 @@ def test_logout_keeps_the_origin_of_the_configured_login_url():
     asyncio.run(page.logout())
 
     assert navigator.visited == ["https://login.example.test/logout"]
+

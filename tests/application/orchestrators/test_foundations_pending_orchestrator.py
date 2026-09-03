@@ -2,14 +2,14 @@
 
 import asyncio
 
-from rosseta_stone_script_a.application.orchestrators.foundations_pending_orchestrator import (
+from Resolucion_script_rosseta.aplicacion.orchestrators.foundations_pending_orchestrator import (
     FoundationsPendingOrchestrator,
 )
-from rosseta_stone_script_a.domain.entities.course_menu import CourseMenu
-from rosseta_stone_script_a.domain.entities.lesson import Lesson
-from rosseta_stone_script_a.domain.entities.path import Path
-from rosseta_stone_script_a.domain.entities.unit import Unit
-from rosseta_stone_script_a.infrastructure.state import StateStore, make_path_key
+from Resolucion_script_rosseta.dominio.entities.course_menu import CourseMenu
+from Resolucion_script_rosseta.dominio.entities.lesson import Lesson
+from Resolucion_script_rosseta.dominio.entities.path import Path
+from Resolucion_script_rosseta.dominio.entities.unit import Unit
+from Resolucion_script_rosseta.infraestructura.state import StateStore, make_path_key
 
 
 class _MenuApi:
@@ -32,3 +32,4 @@ def test_reconciles_remote_foundations_paths_without_sending(tmp_path):
 
     done = Path(0, 0, 0, "vocabulary", "course-1", 1, 1, True, 100)
     assert StateStore(tmp_path).load("user-1").is_done(make_path_key(done))
+

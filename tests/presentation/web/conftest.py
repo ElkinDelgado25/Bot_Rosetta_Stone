@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from rosseta_stone_script_a.presentation.web.backends import RunOutcome
+from Resolucion_script_rosseta.presentacion.web.backends import RunOutcome
 
 
 class FakeBackend:
@@ -57,3 +57,4 @@ def backend() -> FakeBackend:
 def serial_backend() -> FakeBackend:
     """A backend without isolation, where runs must queue (the local case)."""
     return FakeBackend(supports_parallel=False)
+

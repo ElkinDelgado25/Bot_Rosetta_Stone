@@ -1,6 +1,6 @@
 """Tests for FluencySessionCapturer (sync callback for page.on('request'))."""
 
-from rosseta_stone_script_a.application.services.fluency_session_capturer import (
+from Resolucion_script_rosseta.aplicacion.services.fluency_session_capturer import (
     FluencySessionCapturer,
 )
 
@@ -77,3 +77,4 @@ class TestFluencySessionCapturer:
         )
         assert cap.is_exam_complete() is True
         assert cap.get_exam_missing_keys() == []
+

@@ -3,8 +3,8 @@
 import pytest
 from starlette.testclient import TestClient
 
-from rosseta_stone_script_a.presentation.web.app import create_app
-from rosseta_stone_script_a.presentation.web.profiles import ProfileStore
+from Resolucion_script_rosseta.presentacion.web.app import create_app
+from Resolucion_script_rosseta.presentacion.web.profiles import ProfileStore
 
 
 @pytest.fixture
@@ -220,3 +220,4 @@ def test_token_guards_the_api_when_configured(tmp_path, monkeypatch, backend):
         assert ok.status_code == 200
         # Health stays open so a container healthcheck needs no credentials.
         assert client.get("/api/health").status_code == 200
+

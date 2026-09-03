@@ -1,11 +1,11 @@
 """Tests for FluencyProgressBuilder — message fabrication per step type."""
 
-from rosseta_stone_script_a.application.services.fluency_progress_builder import (
+from Resolucion_script_rosseta.aplicacion.services.fluency_progress_builder import (
     FluencyProgressBuilder,
 )
-from rosseta_stone_script_a.domain.entities.fluency_activity import FluencyActivity
-from rosseta_stone_script_a.domain.entities.fluency_sequence import FluencySequence
-from rosseta_stone_script_a.domain.entities.fluency_step import FluencyStep
+from Resolucion_script_rosseta.dominio.entities.fluency_activity import FluencyActivity
+from Resolucion_script_rosseta.dominio.entities.fluency_sequence import FluencySequence
+from Resolucion_script_rosseta.dominio.entities.fluency_step import FluencyStep
 
 
 def _sequence(steps):
@@ -140,3 +140,4 @@ class TestFluencyProgressBuilder:
         first = builder.build_usage_overhead_message(seq, act, 9000)
         second = builder.build_usage_overhead_message(seq, act, 9000)
         assert first["id"] != second["id"]
+

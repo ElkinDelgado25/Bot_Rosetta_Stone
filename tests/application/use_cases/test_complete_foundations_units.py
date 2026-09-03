@@ -9,14 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from rosseta_stone_script_a.application.use_cases.complete_foundations import (
+from Resolucion_script_rosseta.aplicacion.use_cases.complete_foundations import (
     CompleteFoundationsUseCase,
 )
-from rosseta_stone_script_a.domain.entities.course_menu import CourseMenu as _CourseMenu
-from rosseta_stone_script_a.domain.entities.lesson import Lesson
-from rosseta_stone_script_a.domain.entities.path import Path as RosettaPath
-from rosseta_stone_script_a.domain.entities.unit import Unit
-from rosseta_stone_script_a.infrastructure.state import (
+from Resolucion_script_rosseta.dominio.entities.course_menu import CourseMenu as _CourseMenu
+from Resolucion_script_rosseta.dominio.entities.lesson import Lesson
+from Resolucion_script_rosseta.dominio.entities.path import Path as RosettaPath
+from Resolucion_script_rosseta.dominio.entities.unit import Unit
+from Resolucion_script_rosseta.infraestructura.state import (
     RunProgressState,
     make_path_key,
 )
@@ -139,3 +139,4 @@ class TestBatchStats:
 
         assert use_case.stats.total_units_processed == 0
         assert use_case.stats.total_lessons_processed == 0
+

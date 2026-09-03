@@ -166,21 +166,24 @@ por actividad y **re-lee el catálogo para verificar** que el porcentaje se movi
 
 Knobs de seguridad (variables de entorno):
 
-- `FLUENCY_MAX_LESSONS` — cuántas lecciones pendientes completar por corrida
+> Los nombres nuevos están en español. Los viejos siguen como alias por
+> compatibilidad.
+
+- `FLUENCY_LECCIONES_MAX` — cuántas lecciones pendientes completar por corrida
   (default `1` para una primera prueba controlada; `0`/`all` = sin límite).
-- `FLUENCY_DRY_RUN` — `1`/`true` para construir y loguear los mensajes **sin
+- `FLUENCY_EJECUCION_DE_PRUEBA` — `1`/`true` para construir y loguear los mensajes **sin
   enviarlos**. Solo cubre Fluency, y el nombre no lo dice: si la cuenta es
   Foundations, la corrida entra por `CompleteFoundationsOrchestrator`, que no
   mira esta variable y **sí envía**. Comprobado a costa propia el 02-09-2026:
   no se envió nada, pero porque la cuenta ya estaba al 100%, no por la
   variable. Para una prueba de verdad inofensiva, mira antes qué producto
   detecta el dashboard.
-- `FLUENCY_TOTAL_COURSE_HOURS` — presupuesto total de horas de estudio
+- `FLUENCY_HORAS_TOTALES_CURSO` — presupuesto total de horas de estudio
   fabricadas por curso (default `70`, un nivel completo de Rosetta Stone),
   repartido con jitter entre **todas las lecciones que tiene el curso**
   (`course.sequences`, no solo las que esta corrida procesa) y, dentro de
   cada lección, entre sus steps. Divide por el total del curso a propósito:
-  una corrida con `FLUENCY_MAX_LESSONS=1` solo toca una lección, y dividir el
+  una corrida con `FLUENCY_LECCIONES_MAX=1` solo toca una lección, y dividir el
   presupuesto por "1" en vez de por el tamaño real del curso inflaría cada
   step a decenas de minutos. Reemplaza el `durationMs` fijo de 5000ms por
   algo que se parece a Foundations, cuyo `PathCalculator` deriva la duración
@@ -191,7 +194,7 @@ Knobs de seguridad (variables de entorno):
 > **Ojo con el default de 1.** Desde la terminal es deliberado, pero desde la UI
 > web se lee como un fallo: completa una lección y termina con éxito dejando el
 > resto pendientes. Por eso el perfil web tiene `fluency_max_lessons` (None =
-> todas) y los backends exportan `FLUENCY_MAX_LESSONS=all` antes de lanzar. El
+> todas) y los backends exportan `FLUENCY_LECCIONES_MAX=all` antes de lanzar. El
 > default del motor no se cambió.
 
 ### Estado: un archivo por cuenta
@@ -281,7 +284,7 @@ supuesto: no hay `sequenceId` ni `activityId`, el curso viaja como
 es un input estricto, así que los campos de más no se ignoran: invalidan.
 
 Sigue siendo **best-effort** y apagada por default
-(`FLUENCY_SEND_USAGE_OVERHEAD=0`): la completación (0%→100%, confirmada en
+(`FLUENCY_ENVIAR_SOBRECOSTO_USO=0`): la completación (0%→100%, confirmada en
 corrida real) funciona solo con `AddProgress`, esto es telemetría de tiempo de
 uso. Un fallo aquí se loguea a `debug` y nunca revierte el `AddProgress` ya
 exitoso. Lo que queda por confirmar es solo que el servidor la acepta con el
@@ -304,8 +307,8 @@ FluencySequence   (sequence_id, course_id, title, version)           ← de getS
 - `FluencySequence` / `FluencyActivity` / `FluencyStep`: el detalle de una lección,
   con los IDs y las respuestas correctas que la escritura necesitará.
 
-Adaptador: `PlaywrightFluencyApiAdapter` (`infrastructure/adapters/fluency_api/`),
-puerto `FluencyApiPort` (`application/ports/`). Las respuestas crudas se vuelcan a
+Adaptador: `PlaywrightFluencyApiAdapter` (`infraestructura/adapters/fluency_api/`),
+puerto `FluencyApiPort` (`aplicacion/ports/`). Las respuestas crudas se vuelcan a
 `logs/diagnostics/` para inspección, igual que en Foundations.
 
 ## Límite confirmado: Conversation Practice (voz)
@@ -326,7 +329,7 @@ navegador. **No hay endpoint de audio separado**; el reco es local. El orquestad
 ahora abre la actividad con Playwright, dirige el audio nativo de la respuesta a un
 micrófono virtual dentro de la página y deja que el reproductor genere el resultado.
 Solo persiste la actividad cuando `getProgress` confirma `percentComplete=1`. Puede
-desactivarse con `FLUENCY_SPEECH_BROWSER=0`.
+desactivarse con `FLUENCY_NAVEGADOR_VOZ=0`.
 
 ## Medido sobre corridas reales (31-08-2026)
 
@@ -348,7 +351,7 @@ Dos hallazgos que cambiaron el código:
    fallaba igual. `BROWSER_COMPLETED_TYPES` vuelve a llevar solo
    `DialogueExpressionWithReco`. Esos 17 siguen siendo un hueco abierto: por API
    no se completan y por la ruta de voz tampoco, porque no hay voz que dar.
-   Para probar otro tipo sin tocar código: `FLUENCY_BROWSER_EXTRA_TYPES=Tipo1,Tipo2`.
+   Para probar otro tipo sin tocar código: `FLUENCY_TIPOS_EXTRA_NAVEGADOR=Tipo1,Tipo2`.
 2. Las tarjetas de vocabulario **no están rotas**. Los 1/18, 1/17 y 1/11 son
    fotos tomadas *durante* la escritura: mirando la línea de tiempo de esas 4
    actividades (`8dc8f563`, `c368ff9e`, `5bc0a3fc`, `9eff7a94`) cada una sube a
@@ -377,7 +380,7 @@ Lo que hace falta para pasarlo:
 3. **Señal audible durante la comprobación.** La prueba pide decir "1, 2, 3, 4,
    5" y escucha: un micrófono virtual sin nada inyectado es silencio y responde
    *"No se detectó su entrada de audio"*. Se reproduce en bucle
-   `<ROSETTA_HOME>/audio/mic_check.wav` si existe (una voz real), y si no un
+   `<ROSETTA_RAIZ>/audio/mic_check.wav` si existe (una voz real), y si no un
    tono de 220 Hz.
 4. *Comenzar* no es un `<button>`: es un `div`/`span` con `data-qa`. Buscarlo
    por rol devuelve cero y el modal se queda abierto en silencio.
@@ -588,7 +591,7 @@ calla enseguida o no se calla: darle minuto y medio más no cambia el final.
 ## Por qué el árbol NO se acredita por API — probado, no supuesto (02-09-2026)
 
 Se capturó el tráfico real del reproductor al completar una conversación
-(`FLUENCY_CAPTURE_GAIA=1` → `logs/diagnostics/gaia_capture.jsonl`). El navegador
+(`FLUENCY_CAPTURAR_GAIA=1` → `logs/diagnostics/gaia_capture.jsonl`). El navegador
 acredita mandando **un `AddProgress` por paso del árbol**, cada uno con:
 
 ```json
@@ -603,7 +606,7 @@ acredita mandando **un `AddProgress` por paso del árbol**, cada uno con:
 
 Es **exactamente** lo que ya construye `FluencyProgressBuilder`. Así que se probó
 lo obvio: enrutar `DialogueExpressionWithoutReco` por API en vez de por navegador
-(`FLUENCY_BROWSER_EXCLUDE_TYPES=DialogueExpressionWithoutReco`) y mandar esos
+(`FLUENCY_TIPOS_EXCLUIDOS_NAVEGADOR=DialogueExpressionWithoutReco`) y mandar esos
 mensajes. Resultado contra la cuenta viva:
 
 ```
@@ -616,8 +619,8 @@ fabricado lo ignora. La conclusión, ahora con datos: **el árbol se califica de
 lado del servidor según la sesión real que crea el navegador al abrir la
 actividad, no según el `score` que se manda.** El `activityAttemptId` inventado no
 está respaldado por esa sesión. No hay atajo por API — el navegador es
-obligatorio para las conversaciones. Los knobs `FLUENCY_CAPTURE_GAIA` y
-`FLUENCY_BROWSER_EXCLUDE_TYPES` quedan como herramientas de diagnóstico.
+obligatorio para las conversaciones. Los knobs `FLUENCY_CAPTURAR_GAIA` y
+`FLUENCY_TIPOS_EXCLUIDOS_NAVEGADOR` quedan como herramientas de diagnóstico.
 
 ## Resuelto
 

@@ -3,7 +3,7 @@
 Usage:
     uv run --group dev python build.py
 
-The .exe is written to dist/rosseta-script-a.exe. It reads its .env from the
+The .exe is written to dist/Resolucion-script-rossetta.exe. It reads its .env from the
 folder the .exe sits in, and uses a system-installed browser (Chrome/Edge), so
 the target machine does not need `playwright install`.
 """
@@ -11,9 +11,9 @@ the target machine does not need `playwright install`.
 import PyInstaller.__main__
 
 PyInstaller.__main__.run([
-    "src/rosseta_stone_script_a/__main__.py",
+    "src/Resolucion_script_rosseta/__main__.py",
     "--onefile",
-    "--name=rosseta-script-a",
+    "--name=Resolucion-script-rossetta",
     "--console",
     "--clean",
     "--noconfirm",

@@ -2,17 +2,17 @@
 
 import asyncio
 
-from rosseta_stone_script_a.application.orchestrators.fluency_orchestrator import (
+from Resolucion_script_rosseta.aplicacion.orchestrators.fluency_orchestrator import (
     FluencyOrchestrator,
 )
-from rosseta_stone_script_a.domain.entities.fluency_activity import FluencyActivity
-from rosseta_stone_script_a.domain.entities.fluency_catalog import FluencyCatalog
-from rosseta_stone_script_a.domain.entities.fluency_course import (
+from Resolucion_script_rosseta.dominio.entities.fluency_activity import FluencyActivity
+from Resolucion_script_rosseta.dominio.entities.fluency_catalog import FluencyCatalog
+from Resolucion_script_rosseta.dominio.entities.fluency_course import (
     FluencyCourse,
     FluencySequenceRef,
 )
-from rosseta_stone_script_a.domain.entities.fluency_sequence import FluencySequence
-from rosseta_stone_script_a.domain.entities.fluency_step import FluencyStep
+from Resolucion_script_rosseta.dominio.entities.fluency_sequence import FluencySequence
+from Resolucion_script_rosseta.dominio.entities.fluency_step import FluencyStep
 
 
 class _FakeApi:
@@ -82,3 +82,4 @@ class TestFluencyOrchestrator:
 
         assert result is not None
         assert api.get_sequence_calls == [("c1", "pend-seq")]
+

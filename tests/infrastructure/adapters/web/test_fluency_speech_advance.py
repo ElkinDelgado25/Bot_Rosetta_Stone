@@ -19,7 +19,7 @@ import asyncio
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
 )
 
@@ -150,3 +150,4 @@ class TestAdvance:
         speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
         assert asyncio.run(speech._advance_to_next_step(ANTES)) is False
         assert page.boton.clicks == speech.speech_attempts
+
