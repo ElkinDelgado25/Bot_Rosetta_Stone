@@ -20,6 +20,17 @@ from rosseta_stone_script_a.shared.mixins.loggin_mixin import LoggingMixin
 
 LEARN_ORIGIN = "https://learn.rosettastone.com"
 
+
+class _MicNeverCalibrated(Exception):
+    """El micrófono no se habilitó porque el SRE no terminó de calibrar.
+
+    Separada a propósito de ``PlaywrightTimeoutError`` genérico: este fallo es
+    intermitente y se recupera reabriendo la actividad, así que
+    ``complete_activity`` lo reintenta en vez de darlo por perdido. No es plano
+    "se agotó una espera": es "esta espera concreta, la del micrófono, que sí
+    vale la pena reintentar".
+    """
+
 _VIRTUAL_MIC_SCRIPT = r"""
 (() => {
   if (window.__rosettaVirtualMicInstalled) return;
@@ -393,9 +404,24 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         probe_timeout_ms: int = 15_000,
         trace_dir=None,
         speech_attempts: int = 3,
+        mic_retries: int = 2,
     ) -> None:
         self.page = page
         self.timeout_ms = timeout_ms
+        # El motor de reconocimiento de Rosetta a veces entra en un bucle de
+        # cancelación de calibración (en la traza: "Canceling saga
+        # calibrateSaga ... [SRE_CANCEL_SESSION]" repetido durante los 90 s) y
+        # el micrófono no llega a habilitarse nunca. Es **intermitente**: la
+        # conversación siguiente calibra bien con el mismo código. Reabrir la
+        # actividad re-dispara la calibración, así que se reintenta.
+        #
+        # El presupuesto de espera no crece: se reparte. Con 2 reintentos son 3
+        # intentos de ~timeout/3 cada uno — mismo peor caso que un solo intento
+        # de 90 s, pero tres oportunidades a la calibración en vez de una.
+        self.mic_retries = max(0, mic_retries)
+        self.mic_enable_timeout_ms = max(
+            probe_timeout_ms, timeout_ms // (self.mic_retries + 1)
+        )
         # Con traza, una actividad fallida deja un .zip con capturas, DOM y la
         # lista de acciones: es la única forma de ver qué hacía el reproductor
         # cuando la corrida va headless dentro de un contenedor.
@@ -418,20 +444,42 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         activity_id: str,
         expected_steps: int,
     ) -> bool:
-        """Completa la conversación, grabando la sesión si se pidió traza."""
-        tracing = await self._start_trace()
-        self._reconocedor_mudo = False
-        completed = False
-        try:
-            completed = await self._complete_activity(
-                course_title=course_title,
-                lesson_title=lesson_title,
-                activity_id=activity_id,
-                expected_steps=expected_steps,
-            )
-            return completed
-        finally:
-            await self._stop_trace(tracing, activity_id, completed)
+        """Completa la conversación, grabando la sesión si se pidió traza.
+
+        Reintenta cuando el micrófono no calibra (fallo intermitente del SRE de
+        Rosetta): cada intento reabre la actividad desde el mapa, que re-dispara
+        la calibración. El resto de fallos no se reintentan — no cambian al
+        repetirlos.
+        """
+        for intento in range(1, self.mic_retries + 2):
+            tracing = await self._start_trace()
+            self._reconocedor_mudo = False
+            completed = False
+            try:
+                completed = await self._complete_activity(
+                    course_title=course_title,
+                    lesson_title=lesson_title,
+                    activity_id=activity_id,
+                    expected_steps=expected_steps,
+                )
+                return completed
+            except _MicNeverCalibrated:
+                if intento > self.mic_retries:
+                    self.logger.error(
+                        "  El micrófono no calibró en %d intentos; se abandona "
+                        "la conversación (fallo intermitente del reconocedor)",
+                        intento,
+                    )
+                    return False
+                self.logger.info(
+                    "  El micrófono no calibró (intento %d de %d); se reabre la "
+                    "actividad y se reintenta",
+                    intento,
+                    self.mic_retries + 1,
+                )
+            finally:
+                await self._stop_trace(tracing, activity_id, completed)
+        return False
 
     async def _start_trace(self) -> bool:
         if not self.trace_dir:
@@ -535,6 +583,10 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                     return True
 
             return True
+        except _MicNeverCalibrated:
+            # Sube hasta ``complete_activity``, que reabre y reintenta. No se
+            # traga aquí: es justo el fallo que sí vale la pena repetir.
+            raise
         except PlaywrightTimeoutError as exc:
             self.logger.error("  Speech browser flow timed out: %s", exc)
             return False
@@ -904,7 +956,13 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             return False
         return True
 
-    async def _wait(self, expression: str, description: str, arg: Any = None) -> None:
+    async def _wait(
+        self,
+        expression: str,
+        description: str,
+        arg: Any = None,
+        timeout_ms: int | None = None,
+    ) -> None:
         """Espera una condición del reproductor diciendo cuál es.
 
         Cinco esperas distintas daban el mismo "Page.wait_for_function: Timeout
@@ -917,12 +975,11 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             # ``arg`` es keyword-only en Playwright: pasarlo por posición es un
             # TypeError, y aquí salía disfrazado de "Speech browser flow failed"
             # en mitad de la actividad, no al arrancar.
+            espera = timeout_ms if timeout_ms is not None else self.timeout_ms
             if arg is None:
-                await self.page.wait_for_function(expression, timeout=self.timeout_ms)
+                await self.page.wait_for_function(expression, timeout=espera)
             else:
-                await self.page.wait_for_function(
-                    expression, arg=arg, timeout=self.timeout_ms
-                )
+                await self.page.wait_for_function(expression, arg=arg, timeout=espera)
         except PlaywrightTimeoutError:
             self.logger.error("  Se agotó la espera de: %s", description)
             await self._dump_screenshot(description)
@@ -1515,10 +1572,14 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 "return e && !e.hasAttribute('disabled') "
                 "&& e.getAttribute('aria-disabled') !== 'true'; }",
                 "que se habilite el botón de micrófono",
+                timeout_ms=self.mic_enable_timeout_ms,
             )
         except PlaywrightTimeoutError:
             await self._report_button_state()
-            raise
+            # No es un fallo cualquiera: el SRE se quedó calibrando en bucle.
+            # Reabrir la actividad suele calibrar bien, así que se pide reintento
+            # en vez de tirar la conversación. Ver _MicNeverCalibrated.
+            raise _MicNeverCalibrated("el micrófono no se habilitó a tiempo") from None
         await button.click(force=True, timeout=self.timeout_ms)
 
     async def _report_button_state(self) -> None:

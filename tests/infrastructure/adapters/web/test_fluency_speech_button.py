@@ -13,6 +13,7 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
+    _MicNeverCalibrated,
 )
 
 
@@ -69,7 +70,9 @@ class TestSpeechButton:
 
     def test_a_button_that_never_enables_reports_its_state(self):
         page = _Page(falla="SpeechButton")
-        with pytest.raises(PlaywrightTimeoutError):
+        # El micrófono que no se habilita pide reintento (calibración
+        # intermitente del SRE), no un timeout genérico: por eso _MicNeverCalibrated.
+        with pytest.raises(_MicNeverCalibrated):
             asyncio.run(_speech(page)._click_speech_button())
         # El diagnóstico mira el DOM antes de rendirse.
         assert any("outerHTML" in e for e in page.evaluated)
