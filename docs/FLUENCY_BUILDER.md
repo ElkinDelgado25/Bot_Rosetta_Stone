@@ -585,6 +585,40 @@ ellos matándola. Es exactamente lo que arreglan los dos cambios del 02-09
 también por defecto en `_wait_for_all_audio_to_stop`). O el reproductor se
 calla enseguida o no se calla: darle minuto y medio más no cambia el final.
 
+## Por qué el árbol NO se acredita por API — probado, no supuesto (02-09-2026)
+
+Se capturó el tráfico real del reproductor al completar una conversación
+(`FLUENCY_CAPTURE_GAIA=1` → `logs/diagnostics/gaia_capture.jsonl`). El navegador
+acredita mandando **un `AddProgress` por paso del árbol**, cada uno con:
+
+```json
+{
+  "courseId": "...", "sequenceId": "...", "version": 2,
+  "activityId": "...", "activityAttemptId": "<uno, compartido por la actividad>",
+  "activityStepId": "<del árbol>", "activityStepAttemptId": "<uuid nuevo por paso>",
+  "answers": [{"answer": "<id de step.correct>", "correct": true}],
+  "score": 1, "skip": false, "durationMs": 170, "endTimestamp": "..."
+}
+```
+
+Es **exactamente** lo que ya construye `FluencyProgressBuilder`. Así que se probó
+lo obvio: enrutar `DialogueExpressionWithoutReco` por API en vez de por navegador
+(`FLUENCY_BROWSER_EXCLUDE_TYPES=DialogueExpressionWithoutReco`) y mandar esos
+mensajes. Resultado contra la cuenta viva:
+
+```
+actividad 4eb3af0d: our_attempt_registered=True  attempts=49  pct=0  bestGrade=0
+```
+
+El servidor **acepta y registra** los envíos (HTTP 200, sin errores GraphQL,
+`attempts` sube) pero los **califica 0** y deja `percentComplete=0`. El `score: 1`
+fabricado lo ignora. La conclusión, ahora con datos: **el árbol se califica del
+lado del servidor según la sesión real que crea el navegador al abrir la
+actividad, no según el `score` que se manda.** El `activityAttemptId` inventado no
+está respaldado por esa sesión. No hay atajo por API — el navegador es
+obligatorio para las conversaciones. Los knobs `FLUENCY_CAPTURE_GAIA` y
+`FLUENCY_BROWSER_EXCLUDE_TYPES` quedan como herramientas de diagnóstico.
+
 ## Resuelto
 
 - Auth de `gaia-server`: **Bearer token** (un UUID, no un JWT `eyJ`), capturado en

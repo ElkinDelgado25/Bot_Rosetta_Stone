@@ -282,7 +282,19 @@ class DependencyFactory:
 
         extra = os.getenv("FLUENCY_BROWSER_EXTRA_TYPES", "")
         extras = tuple(t.strip() for t in extra.split(",") if t.strip())
-        return BROWSER_COMPLETED_TYPES + extras
+        # ``FLUENCY_BROWSER_EXCLUDE_TYPES`` saca tipos del navegador para
+        # enrutarlos por API. Sirve para probar la hipótesis (02-09-2026) de que
+        # las conversaciones del árbol se acreditan mandando un AddProgress por
+        # paso —lo que hace el reproductor, capturado en gaia_capture— sin pasar
+        # por el micrófono.
+        excluir = {
+            t.strip()
+            for t in os.getenv("FLUENCY_BROWSER_EXCLUDE_TYPES", "").split(",")
+            if t.strip()
+        }
+        return tuple(
+            t for t in (BROWSER_COMPLETED_TYPES + extras) if t not in excluir
+        )
 
     def _fluency_speech_adapter(self) -> PlaywrightFluencySpeechPage | None:
         import os

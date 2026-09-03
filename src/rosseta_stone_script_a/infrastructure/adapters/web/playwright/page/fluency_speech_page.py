@@ -9,7 +9,11 @@ audio into an in-page virtual microphone and lets the normal player submit it.
 from __future__ import annotations
 
 import base64
+import json
+import os
 import re
+import time
+from pathlib import Path
 from typing import Any
 
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
@@ -435,6 +439,42 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         self.speech_attempts = max(1, speech_attempts)
         # Ver _wait_for_recognizer: se rearma al empezar cada actividad.
         self._reconocedor_mudo = False
+        # Diagnóstico: FLUENCY_CAPTURE_GAIA=1 vuelca cada POST a gaia-server que
+        # hace el reproductor durante la conversación (operationName + cuerpo).
+        # Sirve para ver QUÉ manda el navegador para acreditar una conversación
+        # y si se puede replicar por API sin pasar por el micrófono.
+        self._capturar_gaia = os.getenv("FLUENCY_CAPTURE_GAIA", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        self._gaia_listener_puesto = False
+
+    def _on_gaia_request(self, request: Any) -> None:
+        """Escribe un POST a gaia-server en el jsonl de captura. No debe fallar."""
+        try:
+            url = request.url
+            if request.method != "POST" or "gaia-server" not in url:
+                return
+            cuerpo = request.post_data  # str o None
+            registro = {
+                "t": time.strftime("%H:%M:%S"),
+                "url": url,
+                "body": cuerpo,
+            }
+            destino = Path("logs/diagnostics") / "gaia_capture.jsonl"
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            with destino.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(registro, ensure_ascii=False) + "\n")
+        except Exception:  # noqa: BLE001 - es diagnóstico, nunca hunde la corrida
+            pass
+
+    async def _attach_gaia_capture(self) -> None:
+        if not self._capturar_gaia or self._gaia_listener_puesto:
+            return
+        self.page.on("request", self._on_gaia_request)
+        self._gaia_listener_puesto = True
+        self.logger.info("  [captura] registrando POSTs a gaia-server del reproductor")
 
     async def complete_activity(
         self,
@@ -451,6 +491,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         la calibración. El resto de fallos no se reintentan — no cambian al
         repetirlos.
         """
+        await self._attach_gaia_capture()
         for intento in range(1, self.mic_retries + 2):
             tracing = await self._start_trace()
             self._reconocedor_mudo = False

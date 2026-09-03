@@ -29,7 +29,7 @@ Instrucciones y contexto para trabajar en este repositorio. Léeme primero.
 - **FastAPI** — servidor web (opcional, solo si usas interfaz web)
 - **Playwright** — automatización del navegador (Chromium/Chrome/Edge)
 - **Docker** — aislamiento de corridas (opcional, recomendado para la web)
-- **pytest** — tests (367 tests)
+- **pytest** — tests (370 tests)
 
 ---
 
@@ -63,7 +63,7 @@ uv run python -m rosseta_stone_script_a
 
 Lee del `.env`. Primera ejecución lo crea interactivamente.
 
-### Tests — 367 tests, sin navegador ni contenedores
+### Tests — 370 tests, sin navegador ni contenedores
 
 ```bash
 uv run pytest -q
@@ -118,7 +118,7 @@ docs/
 ├── ARCHITECTURE.md       Modularización y capas
 └── FLUENCY_BUILDER.md    Detalles del producto Fluency
 
-tests/                    367 tests, por capas
+tests/                    370 tests, por capas
 ```
 
 ---
@@ -361,7 +361,7 @@ Un JSON tocado a mano en Windows lleva BOM. `json.load` revienta. Se lee con `en
 uv run pytest -q
 ```
 
-367 tests. Ninguno abre navegador ni lanza contenedores:
+370 tests. Ninguno abre navegador ni lanza contenedores:
 - `FakeBackend` inyectado en tests de web
 - Tests de adapters mockean APIs
 - Todo se ejecuta en ~5 segundos
