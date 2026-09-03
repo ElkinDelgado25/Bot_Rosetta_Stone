@@ -358,12 +358,18 @@ class TestMicrophoneSignal:
         """Un zumbido permanente estorbaría al reconocedor después.
 
         Lo decidía un temporizador de 30 s, que tanto podía cortar a mitad de
-        la comprobación como seguir sonando encima de la respuesta. Ahora dura
-        exactamente lo que dura la ventana.
+        la comprobación como seguir sonando encima de la respuesta. Ahora la
+        para el observador cuando la ventana se va, no un temporizador largo.
+        (El único ``setTimeout`` que queda es el throttle de 250 ms del propio
+        observador, no un reloj que decida cuándo callar la señal.)
         """
         guion = modulo._VIRTUAL_MIC_SCRIPT
         assert "__rosettaStopMicNoise" in guion
-        assert "setTimeout" not in guion
+        # La señal se corta desde atenderCalibracion (observador), no por un
+        # temporizador de segundos.
+        assert "30_000" not in guion and "30000" not in guion
+        # El único timer es el throttle corto del observador.
+        assert "250 - (Date.now()" in guion
 
     def test_feeding_an_answer_silences_the_check_loop(self):
         """Si el bucle del "1, 2, 3, 4, 5" sigue, el reconocedor oye las dos."""

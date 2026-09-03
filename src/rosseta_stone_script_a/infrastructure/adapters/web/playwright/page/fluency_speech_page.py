@@ -236,23 +236,43 @@ _VIRTUAL_MIC_SCRIPT = r"""
   };
 
   window.__rosettaMicCheckDismissed = false;
-  // Tras el modal de comprobación, el reconocedor vuelve a calibrar por cada
-  // paso hablado. Con el micrófono virtual en silencio esa calibración cancela
-  // en bucle (en la consola: "Canceling saga calibrateSaga ... [SRE_CANCEL_
-  // SESSION]" repetido durante los 90 s) y el botón nunca se habilita. Esta
-  // bandera mantiene la señal sonando durante esa calibración —igual que en el
-  // modal— y ``__rosettaStopCalibrationNoise`` la baja en cuanto el botón se
-  // habilita, ANTES de grabar la voz: la señal nunca suena encima de la
-  // respuesta que se reconoce.
+  // Piso de ruido blanco bajo para la calibración. HIPÓTESIS DESCARTADA
+  // (03-09-2026, 4º intento): se pensó que la calibración medía el ruido de
+  // fondo y que el silencio digital puro (ceros) la hacía fallar. Probado con
+  // el stream ya estable —para que la señal SÍ llegue— y la traza sale
+  // idéntica: 8 cancels de calibrateSaga cada 4.1 s, con o sin este ruido. El
+  // WARMUP siempre da ~500 (el audio llega), así que el timeout de calibración
+  // no depende de la señal que le demos. Queda como banco de pruebas tras
+  // FLUENCY_MIC_CALIBRATION_NOISE (default off); no arregla el micrófono.
   window.__rosettaCalibrando = false;
+  window.__rosettaPisoRuido = null;
   window.__rosettaStartCalibrationNoise = () => {
     window.__rosettaCalibrando = true;
-    window.__rosettaStartMicNoise();
+    if (window.__rosettaPisoRuido) return true;
+    asegurarContexto().then(() => {
+      if (!window.__rosettaCalibrando) return;
+      const ctx = state.context;
+      const segundos = 2;
+      const buffer = ctx.createBuffer(1, ctx.sampleRate * segundos, ctx.sampleRate);
+      const datos = buffer.getChannelData(0);
+      for (let i = 0; i < datos.length; i += 1) {
+        datos[i] = (Math.random() * 2 - 1) * 0.01;  // ~-40 dB, piso de ruido
+      }
+      const fuente = ctx.createBufferSource();
+      fuente.buffer = buffer;
+      fuente.loop = true;
+      fuente.connect(state.bus);
+      fuente.start();
+      window.__rosettaPisoRuido = fuente;
+    }).catch(() => { window.__rosettaPisoRuido = null; });
     return true;
   };
   window.__rosettaStopCalibrationNoise = () => {
     window.__rosettaCalibrando = false;
-    return window.__rosettaStopMicNoise();
+    const fuente = window.__rosettaPisoRuido;
+    window.__rosettaPisoRuido = null;
+    if (fuente) { try { fuente.stop(); fuente.disconnect(); } catch (e) {} }
+    return true;
   };
   // Mientras la ventana esté, la señal suena; cuando se va, se calla —salvo que
   // estemos calibrando un paso a propósito. Antes lo decidía un temporizador de
@@ -265,9 +285,27 @@ _VIRTUAL_MIC_SCRIPT = r"""
       window.__rosettaStopMicNoise();
     }
   };
-  const vigilante = new MutationObserver(() => {
-    try { atenderCalibracion(); } catch (e) {}
-  });
+  // El escaneo (``ventanaCalibracion`` hace querySelectorAll sobre todo el DOM)
+  // no puede correr en CADA mutación: durante la calibración la página muta sin
+  // parar y el escaneo acaparaba el hilo principal. Medido en la traza
+  // (03-09-2026): ``calibrateSaga`` tiene ~4 s para completarse y se cancelaba
+  // y relanzaba cada 4.1 s sin llegar nunca — competíamos por el hilo justo
+  // cuando el reconocedor lo necesitaba. Se agrupa en como mucho un escaneo
+  // cada 250 ms; el auto-cierre del modal sigue funcionando, pero deja de
+  // ahogar la calibración.
+  let scanPendiente = false;
+  let ultimoScan = 0;
+  const lanzarScan = () => {
+    if (scanPendiente) return;
+    scanPendiente = true;
+    const espera = Math.max(0, 250 - (Date.now() - ultimoScan));
+    setTimeout(() => {
+      scanPendiente = false;
+      ultimoScan = Date.now();
+      try { atenderCalibracion(); } catch (e) {}
+    }, espera);
+  };
+  const vigilante = new MutationObserver(lanzarScan);
   const arrancarVigilante = () => {
     if (document.documentElement) {
       vigilante.observe(document.documentElement, { childList: true, subtree: true });
