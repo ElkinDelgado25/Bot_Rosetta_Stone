@@ -63,6 +63,36 @@ class PlaywrightBrowserProvider(BrowserProviderPort, LoggingMixin):
             "--use-fake-ui-for-media-stream",
             "--use-fake-device-for-media-stream",
         ]
+        # Banco de pruebas: reemplaza el tono de 1 kHz del dispositivo de audio
+        # falso de Chrome por una grabación de voz real ("1, 2, 3, 4, 5") en
+        # bucle. HIPÓTESIS DESCARTADA (03-09-2026): se pensó que el reconocedor
+        # calibraba leyendo el dispositivo y rechazaba el tono. Probado: con el
+        # flag el WARMUP cambia (~500 -> ~900, o sea el audio SÍ cambió) y aun
+        # así calibrateSaga se cancela cada 4.1 s igual. El timeout de
+        # calibración NO depende del contenido del audio (ni del render:
+        # headless falla igual). Default OFF; encendible con
+        # FLUENCY_FAKE_AUDIO_FILE=1 para experimentar. Requiere WAV PCM 16-bit.
+        import os as _os
+        from pathlib import Path
+
+        from rosseta_stone_script_a.infrastructure.core import get_base_dir
+
+        if _os.getenv("FLUENCY_FAKE_AUDIO_FILE", "0").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            base = get_base_dir()
+            candidatos = [
+                base / "audio" / "mic_check.wav",
+                base / "data" / "audio" / "mic_check.wav",
+                Path.cwd() / "data" / "audio" / "mic_check.wav",
+            ]
+            mic_wav = next((c for c in candidatos if c.exists()), None)
+            if mic_wav is not None:
+                launch_args.append(
+                    f"--use-file-for-fake-audio-capture={mic_wav}"
+                )
         if self.enable_no_sandbox:
             launch_args.append("--no-sandbox")
 
