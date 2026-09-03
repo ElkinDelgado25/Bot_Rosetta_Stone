@@ -88,6 +88,11 @@ class _PageQueNoSeCalla:
             raise PlaywrightTimeoutError("sigue sonando")
         return None
 
+    async def evaluate(self, expression, *args):
+        # La señal de calibración se enciende/apaga por aquí; para este test
+        # solo hace falta que no reviente.
+        return None
+
 
 class _Boton:
     def __init__(self):

@@ -227,13 +227,32 @@ _VIRTUAL_MIC_SCRIPT = r"""
   };
 
   window.__rosettaMicCheckDismissed = false;
-  // Mientras la ventana esté, la señal suena; cuando se va, se calla. Antes lo
-  // decidía un temporizador de 30 s que tanto podía cortar a mitad de la
-  // comprobación como seguir sonando encima de la respuesta.
+  // Tras el modal de comprobación, el reconocedor vuelve a calibrar por cada
+  // paso hablado. Con el micrófono virtual en silencio esa calibración cancela
+  // en bucle (en la consola: "Canceling saga calibrateSaga ... [SRE_CANCEL_
+  // SESSION]" repetido durante los 90 s) y el botón nunca se habilita. Esta
+  // bandera mantiene la señal sonando durante esa calibración —igual que en el
+  // modal— y ``__rosettaStopCalibrationNoise`` la baja en cuanto el botón se
+  // habilita, ANTES de grabar la voz: la señal nunca suena encima de la
+  // respuesta que se reconoce.
+  window.__rosettaCalibrando = false;
+  window.__rosettaStartCalibrationNoise = () => {
+    window.__rosettaCalibrando = true;
+    window.__rosettaStartMicNoise();
+    return true;
+  };
+  window.__rosettaStopCalibrationNoise = () => {
+    window.__rosettaCalibrando = false;
+    return window.__rosettaStopMicNoise();
+  };
+  // Mientras la ventana esté, la señal suena; cuando se va, se calla —salvo que
+  // estemos calibrando un paso a propósito. Antes lo decidía un temporizador de
+  // 30 s que tanto podía cortar a mitad de la comprobación como seguir sonando
+  // encima de la respuesta.
   const atenderCalibracion = () => {
     if (ventanaCalibracion()) {
       window.__rosettaDismissMicCheck();
-    } else if (window.__rosettaMicNoise) {
+    } else if (window.__rosettaMicNoise && !window.__rosettaCalibrando) {
       window.__rosettaStopMicNoise();
     }
   };
@@ -257,6 +276,7 @@ _VIRTUAL_MIC_SCRIPT = r"""
     }
     // El bucle de la calibración ("1, 2, 3, 4, 5") no puede seguir sonando por
     // encima de la respuesta: el reconocedor oiría las dos cosas mezcladas.
+    window.__rosettaCalibrando = false;
     window.__rosettaStopMicNoise();
     const binary = atob(encodedAudio);
     const bytes = new Uint8Array(binary.length);
@@ -439,6 +459,14 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         self.speech_attempts = max(1, speech_attempts)
         # Ver _wait_for_recognizer: se rearma al empezar cada actividad.
         self._reconocedor_mudo = False
+        # Da señal al reconocedor durante la calibración por-paso para que no
+        # cancele en bucle contra el silencio del micrófono virtual (medido en
+        # la traza: SRE_CANCEL_SESSION durante los 90 s). Default on; se corta
+        # en cuanto el botón se habilita, antes de grabar. FLUENCY_MIC_CALIBRATION_NOISE=0
+        # lo apaga para comparar.
+        self._ruido_calibracion = os.getenv(
+            "FLUENCY_MIC_CALIBRATION_NOISE", "1"
+        ).strip().lower() not in ("0", "false", "no")
         # Diagnóstico: FLUENCY_CAPTURE_GAIA=1 vuelca cada POST a gaia-server que
         # hace el reproductor durante la conversación (operationName + cuerpo).
         # Sirve para ver QUÉ manda el navegador para acreditar una conversación
@@ -1607,6 +1635,17 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         # perdía la actividad para nada. Sonda corta: si en ese rato no se ha
         # callado, la respuesta la da el botón, no otra espera larga.
         await self._wait_for_all_audio_to_stop(timeout_ms=self.probe_timeout_ms)
+        # El reconocedor calibra ahora, ya sin el modal de comprobación, y con el
+        # micrófono virtual en silencio cancela en bucle y el botón no se
+        # habilita. Se le da señal durante la calibración (voz del mic-check en
+        # bucle, o un tono si no hay grabación) y se corta en cuanto el botón se
+        # habilita —abajo—, antes de grabar la respuesta. Ver
+        # __rosettaStartCalibrationNoise. Apagable con FLUENCY_MIC_CALIBRATION_NOISE=0.
+        if self._ruido_calibracion:
+            await self.page.evaluate(
+                "() => window.__rosettaStartCalibrationNoise "
+                "&& window.__rosettaStartCalibrationNoise()"
+            )
         try:
             await self._wait(
                 "() => { const e = document.querySelector('[data-qa=SpeechButton]'); "
@@ -1616,12 +1655,27 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 timeout_ms=self.mic_enable_timeout_ms,
             )
         except PlaywrightTimeoutError:
+            await self._stop_calibration_noise()
             await self._report_button_state()
             # No es un fallo cualquiera: el SRE se quedó calibrando en bucle.
             # Reabrir la actividad suele calibrar bien, así que se pide reintento
             # en vez de tirar la conversación. Ver _MicNeverCalibrated.
             raise _MicNeverCalibrated("el micrófono no se habilitó a tiempo") from None
+        # Calibrado: se corta la señal ya, para grabar la respuesta en silencio.
+        await self._stop_calibration_noise()
         await button.click(force=True, timeout=self.timeout_ms)
+
+    async def _stop_calibration_noise(self) -> None:
+        """Corta la señal de calibración. Nunca debe hundir el flujo."""
+        if not self._ruido_calibracion:
+            return
+        try:
+            await self.page.evaluate(
+                "() => window.__rosettaStopCalibrationNoise "
+                "&& window.__rosettaStopCalibrationNoise()"
+            )
+        except Exception as error:  # noqa: BLE001 - es limpieza
+            self.logger.debug("  No se pudo cortar la señal de calibración: %s", error)
 
     async def _report_button_state(self) -> None:
         """Cómo estaba el botón cuando se agotó la espera.

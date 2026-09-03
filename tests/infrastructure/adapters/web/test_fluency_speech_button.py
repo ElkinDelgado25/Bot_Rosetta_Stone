@@ -78,6 +78,47 @@ class TestSpeechButton:
         assert any("outerHTML" in e for e in page.evaluated)
         assert page.button.clicked is False
 
+
+def _con_ruido(page, monkeypatch, valor="1"):
+    monkeypatch.setenv("FLUENCY_MIC_CALIBRATION_NOISE", valor)
+    return PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
+
+
+class TestRuidoDeCalibracion:
+    """Da señal al reconocedor mientras calibra, para que no cancele en bucle.
+
+    Medido en la traza (02-09-2026): con el micrófono virtual en silencio, la
+    calibración por-paso lanza SRE_CANCEL_SESSION durante los 90 s y el botón no
+    se habilita. Los 8 cancels caen entre +9.7s y +38.4s, todos antes de que se
+    inyecte audio: el reconocedor no encuentra señal y cancela.
+    """
+
+    def test_arranca_la_senal_antes_de_esperar_el_boton(self, monkeypatch):
+        page = _Page()
+        asyncio.run(_con_ruido(page, monkeypatch)._click_speech_button())
+        arranques = [e for e in page.evaluated if "StartCalibrationNoise" in e]
+        assert arranques, "no se dio señal durante la calibración"
+
+    def test_corta_la_senal_al_habilitarse_el_boton_antes_de_grabar(self, monkeypatch):
+        page = _Page()
+        asyncio.run(_con_ruido(page, monkeypatch)._click_speech_button())
+        cortes = [e for e in page.evaluated if "StopCalibrationNoise" in e]
+        assert cortes, "la señal no se cortó antes de grabar la respuesta"
+        assert page.button.clicked
+
+    def test_corta_la_senal_tambien_cuando_el_microfono_no_calibra(self, monkeypatch):
+        page = _Page(falla="SpeechButton")
+        with pytest.raises(_MicNeverCalibrated):
+            asyncio.run(_con_ruido(page, monkeypatch)._click_speech_button())
+        # Aunque falle, la señal no puede quedarse sonando en la siguiente vuelta.
+        assert any("StopCalibrationNoise" in e for e in page.evaluated)
+
+    def test_apagable_por_env(self, monkeypatch):
+        page = _Page()
+        asyncio.run(_con_ruido(page, monkeypatch, valor="0")._click_speech_button())
+        assert not any("CalibrationNoise" in e for e in page.evaluated)
+        assert page.button.clicked  # sin señal sigue funcionando el resto del flujo
+
     def test_audio_that_never_stops_still_lets_the_button_decide(self):
         """Este test decía lo contrario, y estaba de más.
 
