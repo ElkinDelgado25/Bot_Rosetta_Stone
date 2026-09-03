@@ -5,7 +5,7 @@ reproduce el buffer cacheado. Enganchar `decodeAudioData` solo mientras
 capturamos no veía nada, porque para entonces ya no se decodifica.
 """
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page import (
     fluency_speech_page as modulo,
 )
 
@@ -66,3 +66,4 @@ class TestCaptureScript:
     def test_it_notices_when_the_recogniser_is_ready(self):
         assert "__rosettaSreReady" in GUION
         assert "done loading speech model" in GUION
+

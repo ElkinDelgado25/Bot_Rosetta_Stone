@@ -231,7 +231,7 @@ for q in questions:
 
 print(f"Total C2 answers mapped: {len(c2_answers)}")
 
-target_file = Path(__file__).resolve().parents[1] / "src" / "rosseta_stone_script_a" / "infrastructure" / "adapters" / "exam_api" / "exam_verified_answers.json"
+target_file = Path(__file__).resolve().parents[1] / "src" / "Resolucion_script_rosseta" / "infraestructura" / "adapters" / "exam_api" / "exam_verified_answers.json"
 with open(target_file, "w", encoding="utf-8") as f:
     json.dump(c2_answers, f, indent=2, sort_keys=True)
 

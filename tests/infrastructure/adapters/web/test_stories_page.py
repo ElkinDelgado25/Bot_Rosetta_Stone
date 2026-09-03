@@ -9,8 +9,8 @@ shape and, when it still finds nothing, say where it ended up.
 import asyncio
 from types import SimpleNamespace
 
-import rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.stories_page as stories_module
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.stories_page import (
+import Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.stories_page as stories_module
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.stories_page import (
     StoriesPage,
 )
 
@@ -160,3 +160,4 @@ class TestStoriesPagePrompts:
         )
         story = asyncio.run(_page(interactor).enter_first_story())
         assert story == "Cats"
+

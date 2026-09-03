@@ -1,11 +1,11 @@
 """Tests for FluencyProgressBuilder — message fabrication per step type."""
 
-from rosseta_stone_script_a.application.services.fluency_progress_builder import (
+from Resolucion_script_rosseta.aplicacion.services.fluency_progress_builder import (
     FluencyProgressBuilder,
 )
-from rosseta_stone_script_a.domain.entities.fluency_activity import FluencyActivity
-from rosseta_stone_script_a.domain.entities.fluency_sequence import FluencySequence
-from rosseta_stone_script_a.domain.entities.fluency_step import FluencyStep
+from Resolucion_script_rosseta.dominio.entities.fluency_activity import FluencyActivity
+from Resolucion_script_rosseta.dominio.entities.fluency_sequence import FluencySequence
+from Resolucion_script_rosseta.dominio.entities.fluency_step import FluencyStep
 
 
 def _sequence(steps):
@@ -114,11 +114,30 @@ class TestFluencyProgressBuilder:
         )
         assert [m["durationMs"] for m in msgs] == [1234, 5678]
 
-    def test_usage_overhead_message_carries_identity_and_total_duration(self):
+    def test_usage_overhead_message_matches_the_captured_schema(self):
+        """Los cinco campos de la traza real, ni uno más.
+
+        ``UsageOverheadMessage`` es un input estricto: colar en él los campos de
+        un ProgressMessage (``sequenceId``, ``activityId``) es un error de
+        validación, no un campo de más que el servidor ignore.
+        """
         seq, act = _sequence([FluencyStep("s1", "card", [])])
         m = FluencyProgressBuilder().build_usage_overhead_message(seq, act, 9000)
-        assert m["courseId"] == "course-1"
-        assert m["sequenceId"] == "seq-1"
-        assert m["activityId"] == "act-1"
+        assert set(m) == {
+            "id",
+            "userAgent",
+            "learningContext",
+            "durationMs",
+            "endTimestamp",
+        }
+        assert m["learningContext"] == "course-1"
         assert m["durationMs"] == 9000
         assert m["endTimestamp"].endswith("Z")
+
+    def test_each_usage_overhead_message_gets_its_own_id(self):
+        seq, act = _sequence([FluencyStep("s1", "card", [])])
+        builder = FluencyProgressBuilder()
+        first = builder.build_usage_overhead_message(seq, act, 9000)
+        second = builder.build_usage_overhead_message(seq, act, 9000)
+        assert first["id"] != second["id"]
+

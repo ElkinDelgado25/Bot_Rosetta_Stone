@@ -23,7 +23,9 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --extra web --no-dev --no-install-project
 
 # Chromium + sus librerías de sistema. --with-deps necesita root, por eso va
-# antes de cambiar de usuario.
+# antes de cambiar de usuario. Debian publica la imagen con repos HTTP; usar
+# HTTPS evita fallos en redes que bloquean tráfico HTTP saliente.
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources
 RUN /opt/venv/bin/python -m playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 
@@ -57,4 +59,4 @@ VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/api/health || exit 1
 
-CMD ["python", "-m", "rosseta_stone_script_a.presentation.web.server"]
+CMD ["python", "-m", "Resolucion_script_rosseta.presentacion.web.server"]

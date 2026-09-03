@@ -1,5 +1,5 @@
 import pytest
-from rosseta_stone_script_a.infrastructure.adapters.exam_api.exam_step_parser import (
+from Resolucion_script_rosseta.infraestructura.adapters.exam_api.exam_step_parser import (
     ExamStepParser,
 )
 
@@ -97,3 +97,4 @@ def test_parse_final_completion_score():
     assert result.score.cefr == "C1"
     assert result.score.ilr == "ILR 3"
     assert result.score.clb == "CLB8"
+

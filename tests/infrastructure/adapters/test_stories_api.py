@@ -2,7 +2,7 @@
 
 import asyncio
 
-from rosseta_stone_script_a.infrastructure.adapters.stories_api.playwright_stories_api import (
+from Resolucion_script_rosseta.infraestructura.adapters.stories_api.playwright_stories_api import (
     APP_IDENTIFIER,
     PlaywrightStoriesApiAdapter,
 )
@@ -64,3 +64,4 @@ class TestStoriesApiAdapter:
     def test_a_broken_connection_never_raises(self):
         ctx = _Ctx(raises=RuntimeError("sin red"))
         assert asyncio.run(PlaywrightStoriesApiAdapter(ctx).report_usage("s", 60)) is False
+

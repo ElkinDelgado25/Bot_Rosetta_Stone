@@ -2,7 +2,7 @@
 
 import json
 
-from rosseta_stone_script_a.application.services.stories_session_capturer import (
+from Resolucion_script_rosseta.aplicacion.services.stories_session_capturer import (
     StoriesSessionCapturer,
 )
 
@@ -42,3 +42,4 @@ class TestStoriesSessionCapturer:
         cap.handle_request(_Req(REPORT_URL, "no-json"))
         cap.handle_request(_Req(REPORT_URL, None))
         assert cap.get_session_identifier() is None
+

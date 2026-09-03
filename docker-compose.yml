@@ -1,7 +1,7 @@
 services:
   rosetta-web:
     build: .
-    image: rosseta-script-a:latest
+    image: resolucion-script-rossetta:latest
     container_name: rosetta-web
     restart: unless-stopped
 
@@ -22,7 +22,7 @@ services:
       FLUENCY_SPEECH_TRACE: ${FLUENCY_SPEECH_TRACE:-}
       FLUENCY_BROWSER_EXTRA_TYPES: ${FLUENCY_BROWSER_EXTRA_TYPES:-}
       # Imagen que usan los workers: la misma, con otro comando.
-      ROSETTA_WORKER_IMAGE: rosseta-script-a:latest
+      ROSETTA_WORKER_IMAGE: resolucion-script-rossetta:latest
       # Ruta de ./data EN EL HOST. El worker monta el mismo directorio, y desde
       # dentro del contenedor no se puede adivinar cuál es. Se autodetecta
       # inspeccionando los mounts propios; esto es el respaldo explícito.

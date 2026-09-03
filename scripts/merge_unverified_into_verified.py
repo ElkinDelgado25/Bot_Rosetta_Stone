@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 # Load current verified answers
-target_file = Path(__file__).resolve().parents[1] / "src" / "rosseta_stone_script_a" / "infrastructure" / "adapters" / "exam_api" / "exam_verified_answers.json"
+target_file = Path(__file__).resolve().parents[1] / "src" / "Resolucion_script_rosseta" / "infraestructura" / "adapters" / "exam_api" / "exam_verified_answers.json"
 with open(target_file, "r", encoding="utf-8") as f:
     verified = json.load(f)
 

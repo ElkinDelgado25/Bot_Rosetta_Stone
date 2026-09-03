@@ -1,6 +1,6 @@
 """Tests for FluencyDurationCalculator — budgeted, jittered durations."""
 
-from rosseta_stone_script_a.application.services.fluency_duration_calculator import (
+from Resolucion_script_rosseta.aplicacion.services.fluency_duration_calculator import (
     FluencyDurationCalculator,
 )
 
@@ -34,3 +34,4 @@ class TestFluencyDurationCalculator:
         calc = FluencyDurationCalculator(total_course_hours=10.0)
         durations = calc.step_durations_ms(10, 50)
         assert all(d >= 1500 for d in durations)
+

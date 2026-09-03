@@ -1,8 +1,8 @@
 import asyncio
 import json
 
-from rosseta_stone_script_a.domain.entities.exam import ExamAnswer
-from rosseta_stone_script_a.infrastructure.adapters.exam_api.playwright_exam_api import (
+from Resolucion_script_rosseta.dominio.entities.exam import ExamAnswer
+from Resolucion_script_rosseta.infraestructura.adapters.exam_api.playwright_exam_api import (
     PlaywrightExamApiAdapter,
 )
 
@@ -81,3 +81,4 @@ def test_answer_payload_matches_har_shape():
     assert message["answers"] == [
         {"activityStepId": "step-1", "contentId": "choice-1"}
     ]
+

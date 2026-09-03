@@ -2,7 +2,7 @@
 
 import asyncio
 
-from rosseta_stone_script_a.infrastructure.adapters.learner_dashboard.playwright_learner_dashboard import (
+from Resolucion_script_rosseta.infraestructura.adapters.learner_dashboard.playwright_learner_dashboard import (
     PlaywrightLearnerDashboardAdapter,
 )
 
@@ -80,3 +80,4 @@ class TestLearnerDashboardAdapter:
         hours = _hours(_Ctx(_Resp({"name": "Sin datos"})))
         assert hours.total_hours == 0.0
         assert hours.elearning_hours == 0.0
+

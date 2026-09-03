@@ -2,7 +2,7 @@
 
 import asyncio
 
-from rosseta_stone_script_a.application.services.learner_auth_capturer import (
+from Resolucion_script_rosseta.aplicacion.services.learner_auth_capturer import (
     LearnerAuthCapturer,
 )
 
@@ -76,3 +76,4 @@ class TestLearnerAuthCapturer:
         cap = LearnerAuthCapturer()
         _feed(cap, _Resp(LOGIN_URL, {"auth_data": {"access_token": "solo"}}))
         assert cap.is_complete() is False
+

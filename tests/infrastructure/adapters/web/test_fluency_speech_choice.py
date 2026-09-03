@@ -10,7 +10,7 @@ import asyncio
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
 )
 
@@ -32,11 +32,12 @@ class _Texto:
 
 
 class _Choice:
-    def __init__(self, texto=None):
+    def __init__(self, texto=None, pintado="none|#ffffff"):
         self.texto = texto if texto is not None else _Texto()
         self.box_clicks = 0
         self.dom_clicks = 0
         self.expresiones = []
+        self.pintado = pintado
 
     def get_by_test_id(self, test_id):
         return self.texto
@@ -45,6 +46,9 @@ class _Choice:
         self.box_clicks += 1
 
     async def evaluate(self, expression):
+        # Leer cómo está pintado el radio no es pulsarlo.
+        if "circle" in expression:
+            return self.pintado
         self.dom_clicks += 1
         self.expresiones.append(expression)
 
@@ -75,19 +79,38 @@ def _select(page, choice):
 
 
 class TestChoiceRegistered:
-    def test_it_asks_for_the_three_signals(self):
-        """El micrófono no es la única prueba de que se eligió.
-
-        Comprobar solo el micrófono daba por fallida una selección que sí había
-        ocurrido, y hacía que la escalera agotara sus cuatro intentos.
-        """
+    def test_it_asks_the_signals_that_mean_something(self):
         page = _Page(habilita_tras=1)
         speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
-        asyncio.run(speech._choice_registered())
+        asyncio.run(speech._choice_registered(_Choice(), ""))
         guion = page.consultado[-1]
         assert "SubmitButton" in guion and "omitir" in guion.lower()
         assert "aria-checked" in guion or "radio" in guion
-        assert "SpeechButton" in guion
+
+    def test_the_enabled_microphone_is_no_longer_a_signal(self):
+        """Desde que la comprobación de micrófono se pasa, está siempre listo.
+
+        Aceptarlo como prueba daba por buena la primera forma de pulsar sin
+        haber marcado nada: la actividad entera se recorría con las tres
+        respuestas en blanco.
+        """
+        page = _Page(habilita_tras=1)
+        speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
+        asyncio.run(speech._choice_registered(_Choice(), ""))
+        assert "SpeechButton" not in page.consultado[-1]
+
+    def test_a_repainted_radio_also_counts(self):
+        """Sin aria-checked ni radios de verdad, lo que cambia es el SVG."""
+        page = _Page(habilita_tras=99)  # ninguna señal global
+        speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
+        choice = _Choice(pintado="none|#4195d3")
+        assert asyncio.run(speech._choice_registered(choice, "none|#ffffff")) is True
+
+    def test_an_unchanged_radio_is_not_a_selection(self):
+        page = _Page(habilita_tras=99)
+        speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
+        choice = _Choice(pintado="none|#ffffff")
+        assert asyncio.run(speech._choice_registered(choice, "none|#ffffff")) is False
 
 
 class TestSelectChoice:
@@ -190,17 +213,23 @@ def _play(page, listen):
 
 
 class TestPlayReferenceAudio:
-    def test_the_speaker_click_is_enough_when_it_works(self):
+    def test_the_dom_click_goes_first_because_it_is_the_one_that_works(self):
+        """El orden sale de las trazas, no del gusto.
+
+        El clic por DOM acierta en 0,5-2,5 s; el clic con ``force`` agota su
+        sonda casi siempre. Probándolo al revés se pagaban ~8 s por paso
+        comprando un fallo ya conocido.
+        """
         listen = _Listen()
         assert _play(_Page(habilita_tras=1), listen) is True
-        assert listen.clicks == 1
-        assert listen.dom_clicks == 0
+        assert listen.dom_clicks == 1
+        assert listen.clicks == 0
 
-    def test_falls_back_to_a_dom_click(self):
+    def test_falls_back_to_the_forced_click(self):
         # La primera consulta la gasta la espera del reconocedor.
         listen = _Listen()
         assert _play(_Page(habilita_tras=3), listen) is True
-        assert listen.dom_clicks == 1
+        assert listen.clicks == 1
 
     def test_falls_back_to_the_speaker_icon(self):
         listen = _Listen()
@@ -223,3 +252,4 @@ class TestPlayReferenceAudio:
         speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
         asyncio.run(speech._wait_for_recognizer())
         assert "__rosettaSreReady" in page.consultado[-1]
+

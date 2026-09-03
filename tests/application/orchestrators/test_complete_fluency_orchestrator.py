@@ -4,11 +4,11 @@ import asyncio
 
 import pytest
 
-from rosseta_stone_script_a.application.orchestrators.complete_fluency_orchestrator import (
+from Resolucion_script_rosseta.aplicacion.orchestrators.complete_fluency_orchestrator import (
     CompleteFluencyOrchestrator,
     fluency_activity_key,
 )
-from rosseta_stone_script_a.application.services.fluency_duration_calculator import (
+from Resolucion_script_rosseta.aplicacion.services.fluency_duration_calculator import (
     FluencyDurationCalculator,
 )
 
@@ -20,19 +20,19 @@ def _no_real_sleep(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        "rosseta_stone_script_a.application.orchestrators."
+        "Resolucion_script_rosseta.aplicacion.orchestrators."
         "complete_fluency_orchestrator.asyncio.sleep",
         _instant,
     )
-from rosseta_stone_script_a.domain.entities.fluency_activity import FluencyActivity
-from rosseta_stone_script_a.domain.entities.fluency_catalog import FluencyCatalog
-from rosseta_stone_script_a.domain.entities.fluency_course import (
+from Resolucion_script_rosseta.dominio.entities.fluency_activity import FluencyActivity
+from Resolucion_script_rosseta.dominio.entities.fluency_catalog import FluencyCatalog
+from Resolucion_script_rosseta.dominio.entities.fluency_course import (
     FluencyCourse,
     FluencySequenceRef,
 )
-from rosseta_stone_script_a.domain.entities.fluency_sequence import FluencySequence
-from rosseta_stone_script_a.domain.entities.fluency_step import FluencyStep
-from rosseta_stone_script_a.domain.values.fluency_progress_result import (
+from Resolucion_script_rosseta.dominio.entities.fluency_sequence import FluencySequence
+from Resolucion_script_rosseta.dominio.entities.fluency_step import FluencyStep
+from Resolucion_script_rosseta.dominio.values.fluency_progress_result import (
     FluencyProgressResult,
 )
 
@@ -85,7 +85,8 @@ class _FakeApi:
     async def add_usage_overhead(self, authorization, user_id, messages):
         self.add_usage_overhead_calls.append(messages)
         return FluencyProgressResult(
-            success=True, status=200, activity_id=messages[0]["activityId"],
+            success=True, status=200,
+            course_id=messages[0]["learningContext"],
             message_count=len(messages),
         )
 
@@ -227,11 +228,11 @@ class _SpeechSpy:
 
 
 class _RaisingUsageOverheadApi(_FakeApi):
-    """The inferred AddUsageOverhead mutation can fail (wrong schema guess)."""
+    """AddUsageOverhead es telemetría: si revienta, la lección ya está enviada."""
 
     async def add_usage_overhead(self, authorization, user_id, messages):
         self.add_usage_overhead_calls.append(messages)
-        raise RuntimeError("gaia-server rejected the guessed schema")
+        raise RuntimeError("gaia-server rejected the message")
 
 
 class TestCompleteFluencyOrchestrator:
@@ -248,7 +249,7 @@ class TestCompleteFluencyOrchestrator:
         )
         _run(orch)
         assert len(api.add_usage_overhead_calls) == 1
-        assert api.add_usage_overhead_calls[0][0]["activityId"] == "a1"
+        assert api.add_usage_overhead_calls[0][0]["learningContext"] == "c1"
 
     def test_usage_overhead_failure_does_not_block_completion(self):
         api = _RaisingUsageOverheadApi(["seq-a"])
@@ -257,7 +258,7 @@ class TestCompleteFluencyOrchestrator:
         )
         _run(orch)
         # The activity itself still landed via add_progress despite the
-        # inferred mutation raising.
+        # telemetry call raising.
         assert len(api.add_progress_calls) == 1
         assert len(api.add_usage_overhead_calls) == 1
 
@@ -323,7 +324,7 @@ class TestCompleteFluencyOrchestrator:
     def test_state_skips_completed_activity(self, tmp_path):
         api = _FakeApi(["seq-a"])
         # Pre-mark the activity as done in state.
-        from rosseta_stone_script_a.infrastructure.state import RunProgressState
+        from Resolucion_script_rosseta.infraestructura.state import RunProgressState
 
         state = RunProgressState(tmp_path / "fluency_u1.json")
         state.mark_done(fluency_activity_key("c1", "seq-a", "a1"))
@@ -344,7 +345,7 @@ class TestCompleteFluencyOrchestrator:
         _run(orch)
         # 2 failures + 1 success = 3 attempts, and the activity ends up done.
         assert api.attempts == 3
-        from rosseta_stone_script_a.infrastructure.state import RunProgressState
+        from Resolucion_script_rosseta.infraestructura.state import RunProgressState
 
         reloaded = RunProgressState(tmp_path / "fluency_u1.json")
         assert reloaded.is_done(fluency_activity_key("c1", "seq-a", "a1"))
@@ -377,7 +378,7 @@ class TestCompleteFluencyOrchestrator:
             api_port=api, state_dir=tmp_path, max_lessons=None
         )
         _run(orch)
-        from rosseta_stone_script_a.infrastructure.state import RunProgressState
+        from Resolucion_script_rosseta.infraestructura.state import RunProgressState
 
         reloaded = RunProgressState(tmp_path / "fluency_u1.json")
         assert reloaded.is_done(fluency_activity_key("c1", "seq-a", "a1"))
@@ -391,7 +392,7 @@ class TestCompleteFluencyOrchestrator:
         with pytest.raises(RuntimeError, match="run interrupted"):
             _run(orch)
 
-        from rosseta_stone_script_a.infrastructure.state import RunProgressState
+        from Resolucion_script_rosseta.infraestructura.state import RunProgressState
 
         reloaded = RunProgressState(tmp_path / "fluency_u1.json")
         assert reloaded.is_done(fluency_activity_key("c1", "seq-a", "a1"))
@@ -417,7 +418,7 @@ class TestCompleteFluencyOrchestrator:
                 "expected_steps": 2,
             }
         ]
-        from rosseta_stone_script_a.infrastructure.state import RunProgressState
+        from Resolucion_script_rosseta.infraestructura.state import RunProgressState
 
         state = RunProgressState(tmp_path / "fluency_u1.json")
         assert state.is_done(fluency_activity_key("c1", "seq-a", "voice-a"))
@@ -434,7 +435,8 @@ class TestCompleteFluencyOrchestrator:
 
         _run(orch)
 
-        from rosseta_stone_script_a.infrastructure.state import RunProgressState
+        from Resolucion_script_rosseta.infraestructura.state import RunProgressState
 
         state = RunProgressState(tmp_path / "fluency_u1.json")
         assert not state.is_done(fluency_activity_key("c1", "seq-a", "voice-a"))
+

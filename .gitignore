@@ -5,6 +5,7 @@ build/
 dist/
 wheels/
 *.egg-info
+*.spec
 .pytest_cache/
 
 # Virtual environments
@@ -14,6 +15,11 @@ wheels/
 # Debug and logs
 debug/
 logs/
+.pytest-tmp/
+.pytest-tmp-run/
+.pytest-roseta-audio/
+.env.bak*
+SIGUIENTE_CORRIDA.md
 
 # Network captures can contain authentication headers and session data.
 /hars/

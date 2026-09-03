@@ -2,7 +2,7 @@
 
 import json
 
-from rosseta_stone_script_a.presentation.web.profiles import Profile, ProfileStore
+from Resolucion_script_rosseta.presentacion.web.profiles import Profile, ProfileStore
 
 
 def _store(tmp_path):
@@ -76,3 +76,4 @@ def test_unknown_keys_in_file_are_dropped(tmp_path):
     loaded = ProfileStore(path).get("abc")
     assert isinstance(loaded, Profile)
     assert loaded.name == "U"
+

@@ -11,7 +11,7 @@ import base64
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
 )
 
@@ -115,3 +115,4 @@ class TestReferenceAudioBytes:
     def test_the_dom_supplies_the_source_when_the_hooks_missed_it(self):
         page = _Page(en_pagina=EN_BASE64, src_del_dom="https://x/desde-el-dom.mp3")
         assert _bytes(page, {}) == BYTES
+

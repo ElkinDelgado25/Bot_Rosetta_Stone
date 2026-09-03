@@ -2,7 +2,7 @@
 
 import random
 
-from rosseta_stone_script_a.application.services.stories_usage_planner import (
+from Resolucion_script_rosseta.aplicacion.services.stories_usage_planner import (
     StoriesUsagePlanner,
 )
 
@@ -37,3 +37,4 @@ class TestStoriesUsagePlanner:
     def test_hours_to_seconds(self):
         assert StoriesUsagePlanner.hours_to_seconds(1.5) == 5400
         assert StoriesUsagePlanner.hours_to_seconds(-2) == 0
+

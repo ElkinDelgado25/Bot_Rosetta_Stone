@@ -2,7 +2,7 @@
 
 import json
 
-from rosseta_stone_script_a.presentation.web.session_store import SessionStore
+from Resolucion_script_rosseta.presentacion.web.session_store import SessionStore
 
 CAPTURED = {
     "authorization": "eyJhbGciOiJIUzI1NiJ9.payloadlargo.firma1234",
@@ -71,3 +71,4 @@ def test_corrupt_file_reads_as_empty(tmp_path):
     (tmp_path / "sessions" / "perfil1.json").write_text("{roto", encoding="utf-8")
 
     assert store.load("perfil1") == {}
+

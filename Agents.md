@@ -19,7 +19,7 @@ modelo de contenido, con adaptadores y orquestadores independientes.
 Ejecutar:
 
 ```bash
-.\.venv\Scripts\python.exe -m rosseta_stone_script_a
+.\.venv\Scripts\python.exe -m Resolucion_script_rosseta
 ```
 
 Tests (119 tests):
@@ -31,7 +31,7 @@ Tests (119 tests):
 Levantar la UI web (requiere `uv sync --extra web`):
 
 ```bash
-.\.venv\Scripts\python.exe -m rosseta_stone_script_a.presentation.web.server
+.\.venv\Scripts\python.exe -m Resolucion_script_rosseta.presentacion.web.server
 ```
 
 Levantarla en Docker:
@@ -52,18 +52,18 @@ Recrear el entorno:
 uv sync
 ```
 
-Nota: el módulo se invoca como `rosseta_stone_script_a`, **sin** prefijo `src.`.
-La forma `src.rosseta_stone_script_a` funciona solo por namespace package
+Nota: el módulo se invoca como `Resolucion_script_rosseta`, **sin** prefijo `src.`.
+La forma `src.Resolucion_script_rosseta` funciona solo por namespace package
 implícito y depende de estar parado en la raíz del repo.
 
 ## Dos entradas, un solo motor
 
-`presentation/` tiene dos capas hermanas sobre los **mismos** orquestadores:
+`presentacion/` tiene dos capas hermanas sobre los **mismos** orquestadores:
 
 - **`cli.py`** — una cuenta, la del `.env`, ejecutada de una pasada.
 - **`web/`** — varios usuarios, cada uno con sus credenciales, filtros y
   progreso. Es solo una fachada: construye el mismo `DependencyFactory` y llama
-  a `RosettaCLI.enter_rosetta`. Nada bajo `application/` o `domain/` sabe que
+  a `RosettaCLI.enter_rosetta`. Nada bajo `aplicacion/` o `dominio/` sabe que
   existe.
 
 Piezas de `web/`:
@@ -90,7 +90,7 @@ event loop, y `create_task` lanza `RuntimeError`. Como los tests de error
 (400/404/409) nunca llegan a esa línea, el fallo solo aparecía en producción —
 por eso hay un test del camino feliz por HTTP.
 
-Y `presentation/worker.py`: el comando que ejecuta **un** contenedor efímero.
+Y `presentacion/worker.py`: el comando que ejecuta **un** contenedor efímero.
 Lee su config de un JSON en el volumen, corre una sola corrida, y devuelve los
 tokens capturados por un archivo de resultado.
 
@@ -109,7 +109,7 @@ contenedor web monta `docker.sock`, y quien controle esa web controla el daemon
 — por eso el puerto está en loopback en el compose.
 
 **Dos canales de vuelta.** El worker escribe a stdout: líneas de log normales y
-eventos JSON con prefijo `@@EVENT` (`shared/events.py`). El orquestador separa
+eventos JSON con prefijo `@@EVENT` (`compartido/events.py`). El orquestador separa
 unos de otros en `RunManager.ingest`; los eventos alimentan el avance por
 unidad/lección, el resto va a la consola en vivo.
 
@@ -146,8 +146,8 @@ corrida el progreso se busca por el slug del email.
 
 ## Ciclo de ejecución
 
-Cuatro fases. La entrada es `presentation/cli.py` (o `presentation/web/`); la
-coordinación vive en `application/orchestrators/`.
+Cuatro fases. La entrada es `presentacion/cli.py` (o `presentacion/web/`); la
+coordinación vive en `aplicacion/orchestrators/`.
 
 ### 1. Captura de credenciales (navegador)
 
@@ -310,7 +310,7 @@ ingesta entera.
 
 **Sesión incompleta = error, no silencio** — si la fase del navegador no cosecha
 los cinco valores, ambos orquestadores lanzan `SessionCaptureIncomplete`
-(`domain/errors.py`) en vez de avisar y volver. Antes esa ruta salía con código
+(`dominio/errors.py`) en vez de avisar y volver. Antes esa ruta salía con código
 0 habiendo enviado nada: el scheduler veía éxito y la UI un chip verde.
 
 **Códigos de salida** — `0` ok · `1` error · `2` config ilegible (solo el
@@ -337,7 +337,7 @@ Python de VS Code lo intenta igual y llena el log de errores; por eso
 **No existe `requirements.txt`.** Las dependencias están en `pyproject.toml` y
 fijadas en `uv.lock`. Requiere Python >= 3.14.
 
-**El paquete raíz no tiene `__init__.py`.** `src/rosseta_stone_script_a/` y otras
+**El paquete raíz no tiene `__init__.py`.** `src/Resolucion_script_rosseta/` y otras
 14 carpetas son namespace packages. Por eso `pyproject.toml` declara
 `packages.find` explícito con `where = ["src"]` en vez de confiar en la
 autodetección de setuptools.
@@ -362,7 +362,7 @@ trae Python 3.12 y el proyecto exige >=3.14. Por eso el Dockerfile parte de
 `python:3.14-slim` e instala Chromium con `playwright install --with-deps`.
 
 **Los tests de la web nunca abren un navegador ni un contenedor.**
-`tests/presentation/web/conftest.py` da un `FakeBackend` que se inyecta en
+`tests/presentacion/web/conftest.py` da un `FakeBackend` que se inyecta en
 `RunManager` y `create_app`. Ninguno de los dos resuelve un backend por su
 cuenta en los tests. Si se quita, un test que lance una corrida abrirá Chrome de
 verdad e intentará loguearse en Rosetta Stone — pasó durante el desarrollo y
@@ -388,6 +388,8 @@ Hacer los envios mas indetectables y que no se pueda detectar que es un bot, par
 ### Completado: Soporte de Examen (Screener / Placement Test)
 
 - Extracción y análisis completo de las 70 actividades del examen desde el HAR.
-- Mapeo de respuestas 100% correctas en [`exam_verified_answers.json`](file:///c:/Users/Usuario/Desktop/Personal/Roseta/src/rosseta_stone_script_a/infrastructure/adapters/exam_api/exam_verified_answers.json) para obtener calificación máxima (400 puntos / nivel C2).
+- Mapeo de respuestas 100% correctas en [`exam_verified_answers.json`](file:///c:/Users/Usuario/Desktop/Personal/Roseta/src/Resolucion_script_rosseta/infraestructura/adapters/exam_api/exam_verified_answers.json) para obtener calificación máxima (400 puntos / nivel C2).
 - Autodetección de producto: si el dashboard no ofrece Foundations ni Fluency Builder, o si detecta un examen/evaluación pendiente, inicia automáticamente el caso de uso `CompleteExamUseCase` vía `gaia-server.rosettastone.com/graphql`.
 - Delays humanos configurables por paso para evitar detección.
+
+

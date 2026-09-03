@@ -1,8 +1,8 @@
 import asyncio
 from types import SimpleNamespace
 
-from rosseta_stone_script_a.domain.values.rosetta_product import RosettaProduct
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.dashboard_page import (
+from Resolucion_script_rosseta.dominio.values.rosetta_product import RosettaProduct
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.dashboard_page import (
     DashboardPage,
 )
 
@@ -32,3 +32,4 @@ def test_assessment_url_is_detected_as_exam():
     )
 
     assert product == RosettaProduct.EXAM
+

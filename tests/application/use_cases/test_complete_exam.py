@@ -1,10 +1,10 @@
 import pytest
 from typing import List, Optional
 
-from rosseta_stone_script_a.application.ports.exam_api import IExamApiPort
-from rosseta_stone_script_a.application.services.exam_solver import ExamSolver
-from rosseta_stone_script_a.application.use_cases.complete_exam import CompleteExamUseCase
-from rosseta_stone_script_a.domain.entities.exam import (
+from Resolucion_script_rosseta.aplicacion.ports.exam_api import IExamApiPort
+from Resolucion_script_rosseta.aplicacion.services.exam_solver import ExamSolver
+from Resolucion_script_rosseta.aplicacion.use_cases.complete_exam import CompleteExamUseCase
+from Resolucion_script_rosseta.dominio.entities.exam import (
     ExamActivity,
     ExamAnswer,
     ExamOption,
@@ -13,7 +13,7 @@ from rosseta_stone_script_a.domain.entities.exam import (
     ExamStep,
     ExamStepResult,
 )
-from rosseta_stone_script_a.domain.errors import ExamResponseIncomplete
+from Resolucion_script_rosseta.dominio.errors import ExamResponseIncomplete
 
 
 class FakeExamApiAdapter(IExamApiPort):
@@ -145,7 +145,7 @@ def test_complete_exam_bootstrap_flow(tmp_path):
 def test_exam_step_parser_and_solver_har_compatibility():
     import json
     from pathlib import Path
-    from rosseta_stone_script_a.infrastructure.adapters.exam_api.exam_step_parser import (
+    from Resolucion_script_rosseta.infraestructura.adapters.exam_api.exam_step_parser import (
         ExamStepParser,
     )
 
@@ -200,3 +200,4 @@ def test_incomplete_api_response_is_not_reported_as_success(tmp_path):
 
     with pytest.raises(ExamResponseIncomplete):
         asyncio.run(use_case.execute(assessment_id="123"))
+

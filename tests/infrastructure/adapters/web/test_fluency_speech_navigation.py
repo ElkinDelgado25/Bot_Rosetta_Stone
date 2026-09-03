@@ -10,16 +10,22 @@ import asyncio
 
 import pytest
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.page.fluency_speech_page import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
 )
 
 
 class _Element:
+
     def __init__(self, name):
         self.name = name
         self.clicks = []
 
+
+    @property
+    def first(self):
+        """Un locator de verdad siempre lo ofrece; el código lo usa."""
+        return self
     def get_by_test_id(self, test_id):
         return _Button(self, test_id)
 
@@ -28,16 +34,23 @@ class _Element:
 
 
 class _Button:
+
     def __init__(self, owner, test_id):
         self.owner = owner
         self.test_id = test_id
 
+
+    @property
+    def first(self):
+        """Un locator de verdad siempre lo ofrece; el código lo usa."""
+        return self
     async def click(self, **kwargs):
         self.owner.clicks.append(self.test_id)
 
 
 class _Cards:
     """Una lista de tarjetas que sabe filtrarse por texto, como un Locator."""
+
 
     def __init__(self, titles):
         self.titles = titles
@@ -101,3 +114,4 @@ class TestOpenLesson:
     def test_a_course_that_is_not_there_is_an_error(self):
         with pytest.raises(RuntimeError, match="curso"):
             _open(["Otro curso"], ["Registration"])
+

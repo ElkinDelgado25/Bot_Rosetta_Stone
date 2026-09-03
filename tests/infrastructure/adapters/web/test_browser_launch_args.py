@@ -6,7 +6,7 @@ los que no se notan hasta que algo no funciona y nadie sabe por qué.
 
 import inspect
 
-from rosseta_stone_script_a.infrastructure.adapters.web.playwright.session import (
+from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.session import (
     playwright_browser_provider as modulo,
 )
 
@@ -32,3 +32,4 @@ class TestLaunchArgs:
     def test_shared_memory_is_not_the_container_default(self):
         # /dev/shm pequeño hace que Chromium se caiga dentro de Docker.
         assert "--disable-dev-shm-usage" in CODIGO
+

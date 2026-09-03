@@ -1,10 +1,13 @@
 """Which activity types go through the browser instead of the API.
 
-Only the ones with a microphone belong here. Routing a type without one costs
-90 s of waiting per activity and completes nothing — measured, not guessed.
+Las dos conversaciones, que son las únicas ``ordering: "tree"`` del catálogo y
+las únicas que la API deja en ``percentComplete=0`` por mucho que se le mande el
+mensaje correcto. Lo que el servidor no acredita fabricado es el árbol, no la
+voz: por eso ``WithoutReco``, que se contesta pulsando y no hablando, también va
+por aquí.
 """
 
-from rosseta_stone_script_a.application.orchestrators.complete_fluency_orchestrator import (
+from Resolucion_script_rosseta.aplicacion.orchestrators.complete_fluency_orchestrator import (
     BROWSER_COMPLETED_TYPES,
     CompleteFluencyOrchestrator,
 )
@@ -15,9 +18,12 @@ def _orchestrator(**kwargs):
 
 
 class TestBrowserCompletedTypes:
-    def test_only_the_type_with_a_microphone_is_routed_there(self):
-        """"WithoutReco" no tiene micrófono: mandarlo aquí fue un error medido."""
-        assert BROWSER_COMPLETED_TYPES == ("DialogueExpressionWithReco",)
+    def test_both_tree_conversations_are_routed_there(self):
+        """Las dos, con micrófono y sin él: lo que la API no acredita es el árbol."""
+        assert BROWSER_COMPLETED_TYPES == (
+            "DialogueExpressionWithReco",
+            "DialogueExpressionWithoutReco",
+        )
 
     def test_the_default_set_is_used_when_none_is_given(self):
         assert _orchestrator().browser_completed_types == BROWSER_COMPLETED_TYPES
@@ -30,3 +36,4 @@ class TestBrowserCompletedTypes:
 
     def test_an_empty_set_sends_everything_through_the_api(self):
         assert _orchestrator(browser_completed_types=()).browser_completed_types == ()
+
