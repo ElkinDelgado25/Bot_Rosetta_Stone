@@ -67,8 +67,17 @@ _VIRTUAL_MIC_SCRIPT = r"""
   devices.getUserMedia = async (constraints) => {
     if (!constraints || !constraints.audio) return original(constraints);
     await asegurarContexto();
-    state.destination = state.context.createMediaStreamDestination();
-    state.bus.connect(state.destination);
+    // Un SOLO destino/stream para toda la actividad, cacheado. Antes se creaba
+    // uno nuevo en cada llamada: si el reconocedor vuelve a pedir el micrófono
+    // durante la calibración —y lo hace—, cada stream nuevo reinicia la
+    // calibración desde cero. En la traza (03-09-2026) eso se veía como
+    // ``calibrateSaga`` cancelándose y relanzándose cada 4.1 s sin terminar
+    // nunca, y el botón sin habilitarse en 90 s. Devolver siempre el mismo
+    // stream le da al reconocedor una fuente estable que sí puede calibrar.
+    if (!state.destination) {
+      state.destination = state.context.createMediaStreamDestination();
+      state.bus.connect(state.destination);
+    }
     window.__rosettaMicReady = true;
     window.__rosettaMicRequests = (window.__rosettaMicRequests || 0) + 1;
     return state.destination.stream;
@@ -459,14 +468,19 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         self.speech_attempts = max(1, speech_attempts)
         # Ver _wait_for_recognizer: se rearma al empezar cada actividad.
         self._reconocedor_mudo = False
-        # Da señal al reconocedor durante la calibración por-paso para que no
-        # cancele en bucle contra el silencio del micrófono virtual (medido en
-        # la traza: SRE_CANCEL_SESSION durante los 90 s). Default on; se corta
-        # en cuanto el botón se habilita, antes de grabar. FLUENCY_MIC_CALIBRATION_NOISE=0
-        # lo apaga para comparar.
+        # Idea descartada: dar señal al reconocedor durante la calibración
+        # por-paso, creyendo que cancelaba en bucle por el silencio del
+        # micrófono virtual. Probado contra la cuenta viva (03-09-2026): NO
+        # ayuda. La traza demuestra que el reconocedor sí recibe audio ("mic
+        # access: allowed", "setting mic to Fake Default Audio Input", WARMUP
+        # RESULT ~500), y aun así ``calibrateSaga`` se cancela y relanza cada
+        # 4.1 s exactos sin terminar nunca. Con o sin señal la traza es idéntica
+        # (8 cancels, mismos tiempos). Además, la calibración parece medir el
+        # ruido de fondo, así que meter un tono continuo iría en contra.
+        # Default **off**; queda tras el flag por si sirve de banco de pruebas.
         self._ruido_calibracion = os.getenv(
-            "FLUENCY_MIC_CALIBRATION_NOISE", "1"
-        ).strip().lower() not in ("0", "false", "no")
+            "FLUENCY_MIC_CALIBRATION_NOISE", "0"
+        ).strip().lower() in ("1", "true", "yes")
         # Diagnóstico: FLUENCY_CAPTURE_GAIA=1 vuelca cada POST a gaia-server que
         # hace el reproductor durante la conversación (operationName + cuerpo).
         # Sirve para ver QUÉ manda el navegador para acreditar una conversación
