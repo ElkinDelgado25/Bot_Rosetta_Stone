@@ -330,18 +330,21 @@ class TestMicrophoneSignal:
         assert "createOscillator" in guion
 
     def test_the_signal_goes_to_a_bus_that_outlives_the_destination(self):
-        """El destino se crea en cada ``getUserMedia``, la señal no.
+        """El destino se crea VIVO en cada ``getUserMedia``, la señal no.
 
-        Conectando al destino de turno, lo que empezara a sonar antes de que la
-        página pidiera el micrófono acababa conectado a nada: el medidor de la
-        comprobación se quedaba en una barra de diez y la ventana no se iba.
+        El reproductor mata el track del stream que le damos (medido: pide el
+        micrófono 12 veces), así que se crea un destino nuevo y vivo en cada
+        petición y el bus —donde vive la señal— se conecta a él. Conectando la
+        señal al destino de turno en vez de al bus, lo que empezara a sonar
+        antes acababa conectado a nada y el medidor se quedaba en 1 de 10.
         """
         guion = modulo._VIRTUAL_MIC_SCRIPT
+        # Las fuentes de señal van al bus, no a un destino concreto.
         assert "connect(state.bus)" in guion
-        assert "state.bus.connect(state.destination)" in guion
-        assert "connect(state.destination)" not in guion.replace(
-            "state.bus.connect(state.destination)", ""
-        )
+        # El bus se conecta al destino nuevo de cada petición.
+        assert "state.bus.connect(destino)" in guion
+        # Y ese destino pasa a ser el actual.
+        assert "state.destination = destino" in guion
 
     def test_the_signal_can_start_before_the_page_asks_for_the_mic(self):
         # asegurarContexto() crea contexto y bus sin esperar a getUserMedia.

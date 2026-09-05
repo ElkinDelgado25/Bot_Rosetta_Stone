@@ -94,13 +94,53 @@ _VIRTUAL_MIC_SCRIPT = r"""
     // ``calibrateSaga`` cancelándose y relanzándose cada 4.1 s sin terminar
     // nunca, y el botón sin habilitarse en 90 s. Devolver siempre el mismo
     // stream le da al reconocedor una fuente estable que sí puede calibrar.
-    if (!state.destination) {
-      state.destination = state.context.createMediaStreamDestination();
-      state.bus.connect(state.destination);
-    }
+    // Un destino/stream NUEVO y vivo en cada petición. El reproductor pide el
+    // micrófono muchas veces (medido: 12) y detiene el track del stream que le
+    // dimos; devolver un stream cacheado entrega su track ya muerto —silencio,
+    // nivel 0, track 'ended'— y la comprobación "Diga 1,2,3,4,5" se queda en
+    // 1 barra para siempre. Creando uno vivo en cada llamada, cada vez que el
+    // reproductor abre el micrófono recibe una fuente que sí suena. El bus (con
+    // la señal ya sonando) se conecta al nuevo destino, así el audio sale desde
+    // el primer instante. (El cacheo anterior se puso creyendo que un stream
+    // nuevo reiniciaba la calibración; esa causa resultó ser el motor de habla,
+    // así que crear siempre uno vivo es lo correcto.)
+    const destino = state.context.createMediaStreamDestination();
+    state.bus.connect(destino);
+    state.destination = destino;
     window.__rosettaMicReady = true;
     window.__rosettaMicRequests = (window.__rosettaMicRequests || 0) + 1;
-    return state.destination.stream;
+    return destino.stream;
+  };
+
+  // Diagnóstico del grafo de audio: si el medidor no sube, esto dice por qué.
+  // Mide el nivel real que sale del destino con un AnalyserNode, y reporta si
+  // el contexto está corriendo y cuántas veces se pidió el micrófono por aquí.
+  window.__rosettaAudioDebug = () => {
+    const info = {
+      contexto: state.context ? state.context.state : "sin-contexto",
+      micReqs: window.__rosettaMicRequests || 0,
+      ruido: window.__rosettaMicNoise
+        ? (window.__rosettaMicNoise.modo || "activo") : null,
+      nivel: null,
+      pistasDelStream: null,
+    };
+    try {
+      if (state.destination) {
+        const an = state.context.createAnalyser();
+        an.fftSize = 512;
+        state.bus.connect(an);
+        const buf = new Uint8Array(an.fftSize);
+        an.getByteTimeDomainData(buf);
+        let pico = 0;
+        for (let i = 0; i < buf.length; i += 1) {
+          pico = Math.max(pico, Math.abs(buf[i] - 128));
+        }
+        info.nivel = pico;  // 0-127; 0 = silencio, alto = señal fuerte
+        info.pistasDelStream = state.destination.stream.getAudioTracks()
+          .map(t => t.readyState + "/" + t.enabled).join(",");
+      }
+    } catch (e) { info.error = String(e).slice(0, 60); }
+    return info;
   };
 
   // La "Comprobación de micrófono" de Fluency lista los dispositivos y no deja
@@ -176,7 +216,17 @@ _VIRTUAL_MIC_SCRIPT = r"""
         const volumen = state.context.createGain();
         fuente.buffer = window.__rosettaMicCheckBuffer;
         fuente.loop = true;
-        volumen.gain.value = 1.75;
+        // El medidor de la comprobación necesita NIVEL: con 1.75 solo se
+        // encendía 1 de 10 barras y la prueba no pasaba (medido 05-09-2026).
+        // Se sube con margen; el reconocedor real oye el audio inyectado
+        // aparte, así que aquí lo único que importa es llenar las barras.
+        // Tunable por ventana para iterar sin recompilar.
+        // La comprobación es de una actividad WithReco: RECONOCE el "1,2,3,4,5",
+        // no solo mide nivel. Saturar el audio (gain alto) llenaba el medidor
+        // pero lo volvía irreconocible y la comprobación no pasaba. Con el track
+        // ya vivo, lo que hace falta es audio LIMPIO a nivel natural: un empujón
+        // suave sin recortar. Tunable por ventana para calibrarlo fino.
+        volumen.gain.value = window.__rosettaMicCheckGain || 1.0;
         fuente.connect(volumen);
         volumen.connect(state.bus);
         fuente.start();
@@ -2081,6 +2131,47 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             )
         except Exception as error:  # noqa: BLE001 - diagnosticar no puede fallar más
             self.logger.debug("  No se pudo leer el estado del botón: %s", error)
+        # Diagnóstico del motor de habla: qué ve el gancho y qué texto hay en
+        # pantalla alrededor de "motor/engine/micrófono". Si el botón no se
+        # habilita por una carga que la detección no reconoce, aquí sale el
+        # texto real para ajustar FRASES_MOTOR.
+        try:
+            motor = await self.page.evaluate(
+                "() => {"
+                " const g = window.__rosettaSpeechEngineState "
+                "? window.__rosettaSpeechEngineState() : 'sin-gancho';"
+                " const c = window.__rosettaMicCheckState "
+                "? window.__rosettaMicCheckState() : 'sin-gancho';"
+                " return { gancho: g, check: c }; }"
+            )
+            self.logger.error(
+                "  [diag motor] engine=%s | check=%s",
+                motor.get("gancho"),
+                motor.get("check"),
+            )
+        except Exception as error:  # noqa: BLE001 - solo diagnóstico
+            self.logger.debug("  No se pudo leer el estado del motor: %s", error)
+        try:
+            html = await self.page.evaluate(
+                "() => { const w = document.querySelector('[data-qa=CalibrationWindow]');"
+                " if (!w) return null;"
+                " const botones = [...w.querySelectorAll('button, [data-qa]')]"
+                ".map(b => (b.getAttribute('data-qa') || b.tagName) + ':' "
+                "+ (b.textContent || '').trim().slice(0, 25)).slice(0, 20);"
+                " const medidor = w.querySelector('[data-qa=CalibrateMeter]');"
+                " return { botones, medidorHTML: medidor ? medidor.outerHTML.slice(0, 400) : null }; }"
+            )
+            self.logger.error("  [diag ventana] %r", html)
+        except Exception as error:  # noqa: BLE001 - solo diagnóstico
+            self.logger.debug("  No se pudo leer la ventana: %s", error)
+        try:
+            audio = await self.page.evaluate(
+                "() => window.__rosettaAudioDebug "
+                "? window.__rosettaAudioDebug() : 'sin-gancho'"
+            )
+            self.logger.error("  [diag audio] %r", audio)
+        except Exception as error:  # noqa: BLE001 - solo diagnóstico
+            self.logger.debug("  No se pudo leer el audio: %s", error)
 
     async def _capture_choice_audio(self, choice: Any) -> bytes:
         listen = choice.get_by_test_id("ListenButton")
