@@ -507,10 +507,24 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         # El presupuesto de espera no crece: se reparte. Con 2 reintentos son 3
         # intentos de ~timeout/3 cada uno — mismo peor caso que un solo intento
         # de 90 s, pero tres oportunidades a la calibración en vez de una.
+        # Reintentos y espera del micrófono, con override por env para poder
+        # "fallar rápido" cuando se sabe que el SRE no está calibrando (medido:
+        # 0/6 el 03-09). Cada hablada fallida cuesta ~2-2,5 min con los valores
+        # por defecto (30 s de espera × 3 intentos + reabrir la actividad);
+        # FLUENCY_MIC_RETRIES=0 y FLUENCY_MIC_ENABLE_TIMEOUT_MS=8000 la bajan a
+        # ~8 s, acelerando muchísimo una corrida completa donde las habladas van
+        # a fallar igual. Si el micrófono vuelve a funcionar, se suben otra vez.
+        _env_retries = os.getenv("FLUENCY_MIC_RETRIES", "").strip()
+        if _env_retries.isdigit():
+            mic_retries = int(_env_retries)
         self.mic_retries = max(0, mic_retries)
-        self.mic_enable_timeout_ms = max(
-            probe_timeout_ms, timeout_ms // (self.mic_retries + 1)
-        )
+        _env_enable = os.getenv("FLUENCY_MIC_ENABLE_TIMEOUT_MS", "").strip()
+        if _env_enable.isdigit():
+            self.mic_enable_timeout_ms = max(1_000, int(_env_enable))
+        else:
+            self.mic_enable_timeout_ms = max(
+                probe_timeout_ms, timeout_ms // (self.mic_retries + 1)
+            )
         # Con traza, una actividad fallida deja un .zip con capturas, DOM y la
         # lista de acciones: es la única forma de ver qué hacía el reproductor
         # cuando la corrida va headless dentro de un contenedor.

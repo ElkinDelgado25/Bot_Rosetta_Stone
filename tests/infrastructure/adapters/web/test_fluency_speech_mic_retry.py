@@ -84,3 +84,26 @@ class TestReintentoDeMicrofono:
         solo = _EspiaReintento([True], mic_retries=0)
         assert solo.mic_enable_timeout_ms == solo.timeout_ms
 
+
+
+class TestFallarRapidoPorEnv:
+    """Cuando el micrófono no calibra, esperar 2 min por hablada es tirar tiempo.
+
+    FLUENCY_MIC_RETRIES y FLUENCY_MIC_ENABLE_TIMEOUT_MS dejan bajar la espera a
+    ~8 s sin tocar código, para una corrida completa donde las habladas van a
+    fallar igual.
+    """
+
+    def test_env_baja_los_reintentos_y_la_espera(self, monkeypatch):
+        monkeypatch.setenv("FLUENCY_MIC_RETRIES", "0")
+        monkeypatch.setenv("FLUENCY_MIC_ENABLE_TIMEOUT_MS", "8000")
+        speech = PlaywrightFluencySpeechPage(None)  # type: ignore[arg-type]
+        assert speech.mic_retries == 0
+        assert speech.mic_enable_timeout_ms == 8000
+
+    def test_sin_env_mantiene_el_reparto_por_defecto(self, monkeypatch):
+        monkeypatch.delenv("FLUENCY_MIC_RETRIES", raising=False)
+        monkeypatch.delenv("FLUENCY_MIC_ENABLE_TIMEOUT_MS", raising=False)
+        speech = PlaywrightFluencySpeechPage(None)  # type: ignore[arg-type]
+        assert speech.mic_retries == 2
+        assert speech.mic_enable_timeout_ms == speech.timeout_ms // 3
