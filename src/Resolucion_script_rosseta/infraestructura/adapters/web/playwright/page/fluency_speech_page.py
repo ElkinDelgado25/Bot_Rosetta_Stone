@@ -24,6 +24,12 @@ from Resolucion_script_rosseta.compartido.mixins.loggin_mixin import LoggingMixi
 
 LEARN_ORIGIN = "https://learn.rosettastone.com"
 
+# 2x recorta a la mitad el audio del reproductor sin que el reproductor note
+# nada raro: los eventos (``ended``, ``audio_playing``) llegan igual, solo que
+# antes. Se sube con FLUENCY_AUDIO_SPEED si se quiere apurar mas, o se pone a 1
+# para dejarlo como estaba.
+_DEFAULT_AUDIO_SPEED = 2.0
+
 
 class _MicNeverCalibrated(Exception):
     """El micrófono no se habilitó porque el SRE no terminó de calibrar.
@@ -33,6 +39,15 @@ class _MicNeverCalibrated(Exception):
     ``complete_activity`` lo reintenta en vez de darlo por perdido. No es plano
     "se agotó una espera": es "esta espera concreta, la del micrófono, que sí
     vale la pena reintentar".
+    """
+
+
+class _MotorDeHablaNoCarga(Exception):
+    """El reproductor no acabó de descargar su motor de reconocimiento.
+
+    Lo contrario de ``_MicNeverCalibrated``: este fallo **no** se reintenta.
+    Reabrir la actividad es una navegación completa que devuelve la carga a
+    0 %, así que reintentar no da otra oportunidad — quita la que había.
     """
 
 _VIRTUAL_MIC_SCRIPT = r"""
@@ -59,6 +74,11 @@ _VIRTUAL_MIC_SCRIPT = r"""
   const asegurarContexto = async () => {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!state.context) state.context = new AudioContextClass({ sampleRate: 48000 });
+    // Marca de "esto lo reproducimos nosotros". El acelerador de audio de
+    // _REFERENCE_AUDIO_CAPTURE_SCRIPT tiene que dejar en paz todo lo que sale
+    // por aqui: acelerar la voz que oye el reconocedor es garantizar que no la
+    // entienda.
+    window.__rosettaMicContext = state.context;
     if (!state.bus) state.bus = state.context.createGain();
     try { await state.context.resume(); } catch (e) {}
     return state.context;
@@ -335,6 +355,31 @@ _VIRTUAL_MIC_SCRIPT = r"""
     arrancarVigilante();
   }
 
+  // Antes de dejar pulsar el micrófono, el reproductor descarga y arranca su
+  // motor de reconocimiento, y lo anuncia con un porcentaje ("Configurar
+  // micrófono · Cargando motor de habla…28%"). Mientras ese modal esté, el
+  // botón NO se va a habilitar se haga lo que se haga: no es que la
+  // calibración falle, es que todavía no hay motor con el que calibrar.
+  // Medido el 05-09-2026: al 28% tras 30 s, o sea ~100 s de carga. Devolver el
+  // porcentaje permite esperar **al progreso** en vez de a un reloj.
+  const FRASES_MOTOR = new RegExp(
+    "cargando motor de habla|loading speech (engine|model)"
+      + "|preparando el motor|initializing speech",
+    "i"
+  );
+  window.__rosettaSpeechEngineState = () => {
+    const raiz = ventanaCalibracion() || document.body;
+    if (!raiz) return null;
+    const texto = (raiz.innerText || raiz.textContent || "").replace(/\s+/g, " ");
+    if (!FRASES_MOTOR.test(texto)) return null;
+    const pct = texto.match(/(\d{1,3})\s*%/);
+    return {
+      cargando: true,
+      pct: pct ? Number(pct[1]) : null,
+      texto: texto.trim().slice(0, 120),
+    };
+  };
+
   window.__rosettaFeedMicrophone = async (encodedAudio) => {
     if (!state.context || !state.destination) {
       throw new Error("virtual microphone is not ready");
@@ -349,6 +394,7 @@ _VIRTUAL_MIC_SCRIPT = r"""
     const buffer = await state.context.decodeAudioData(bytes.buffer.slice(0));
     const source = state.context.createBufferSource();
     source.buffer = buffer;
+    source.__rosettaNoSpeed = true;  // nunca acelerar lo que oye el reconocedor
     source.connect(state.bus);
     window.__rosettaMicPlaybackDone = false;
     source.onended = () => { window.__rosettaMicPlaybackDone = true; };
@@ -454,6 +500,19 @@ _REFERENCE_AUDIO_CAPTURE_SCRIPT = r"""
           }
         }
       } catch (e) {}
+      // El reproductor se pasa la actividad entera sonando y nosotros
+      // esperandolo: el enunciado de cada paso, la respuesta del altavoz y el
+      // audio que deshabilita el microfono mientras dura. Acelerarlo acorta esa
+      // espera de verdad, no un timeout. Los bytes capturados salen del buffer,
+      // no de la reproduccion, asi que lo que se le inyecta al reconocedor
+      // sigue sonando a velocidad normal.
+      try {
+        const factor = window.__rosettaAudioSpeed || 1;
+        if (factor > 1 && !this.__rosettaNoSpeed
+            && this.context !== window.__rosettaMicContext) {
+          this.playbackRate.value = factor;
+        }
+      } catch (e) {}
       return originalStart.apply(this, args);
     };
   }
@@ -479,10 +538,41 @@ _REFERENCE_AUDIO_CAPTURE_SCRIPT = r"""
       const source = this.currentSrc || this.src;
       if (source) window.__rosettaReferenceAudioUrl = source;
     }
+    // Misma idea que en AudioBufferSourceNode.start: el microfono virtual no
+    // pasa por HTMLMediaElement, asi que aqui no hay nada que excluir.
+    try {
+      const factor = window.__rosettaAudioSpeed || 1;
+      if (factor > 1) this.playbackRate = factor;
+    } catch (e) {}
     return originalPlay.apply(this, args);
   };
 })();
 """
+
+
+def _leer_velocidad_audio() -> float:
+    """``FLUENCY_AUDIO_SPEED``, acotado a un rango que el navegador respeta.
+
+    Por encima de 4x Chromium deja de reproducir en vez de ir mas rapido, y por
+    debajo de 1 solo se conseguiria alargar la corrida.
+    """
+    crudo = os.getenv("FLUENCY_AUDIO_SPEED", "").strip()
+    if not crudo:
+        return _DEFAULT_AUDIO_SPEED
+    try:
+        return min(4.0, max(1.0, float(crudo)))
+    except ValueError:
+        return _DEFAULT_AUDIO_SPEED
+
+
+def _audio_speed_script(factor: float) -> str:
+    """Guion minimo que fija la velocidad que leeran los dos ganchos de audio.
+
+    Va aparte y se lee de forma perezosa (``window.__rosettaAudioSpeed || 1``)
+    para que el orden en que se instalen los guiones no importe: si este no
+    llego a correr, los ganchos se quedan a velocidad normal en vez de romper.
+    """
+    return f"window.__rosettaAudioSpeed = {factor};"
 
 
 class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
@@ -494,6 +584,8 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         trace_dir=None,
         speech_attempts: int = 3,
         mic_retries: int = 2,
+        engine_timeout_ms: int = 300_000,
+        engine_stall_ms: int = 45_000,
     ) -> None:
         self.page = page
         self.timeout_ms = timeout_ms
@@ -538,6 +630,24 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         self.speech_attempts = max(1, speech_attempts)
         # Ver _wait_for_recognizer: se rearma al empezar cada actividad.
         self._reconocedor_mudo = False
+        # Carga del motor de habla. Es la causa real de "el micrófono no se
+        # habilita" (auditoría 05-09-2026): el modal se queda en "Cargando
+        # motor de habla…28%" y el botón no puede habilitarse porque no hay
+        # motor. Se espera **al progreso**, no a un reloj: mientras el
+        # porcentaje suba se sigue esperando, y solo se abandona si se queda
+        # parado. El techo absoluto es generoso a propósito — una descarga de
+        # ~100 s no cabía en los 30 s del presupuesto del micrófono.
+        _env_motor = os.getenv("FLUENCY_SPEECH_ENGINE_TIMEOUT_MS", "").strip()
+        if _env_motor.isdigit():
+            engine_timeout_ms = int(_env_motor)
+        self.engine_timeout_ms = max(1_000, engine_timeout_ms)
+        _env_parado = os.getenv("FLUENCY_SPEECH_ENGINE_STALL_MS", "").strip()
+        if _env_parado.isdigit():
+            engine_stall_ms = int(_env_parado)
+        self.engine_stall_ms = max(1_000, engine_stall_ms)
+        # El motor se carga una vez por sesión de navegador y se reutiliza: la
+        # primera conversación paga la espera larga, las demás no la ven.
+        self._motor_cargado = False
         # Idea descartada: dar señal al reconocedor durante la calibración
         # por-paso, creyendo que cancelaba en bucle por el silencio del
         # micrófono virtual. Probado contra la cuenta viva (03-09-2026): NO
@@ -561,6 +671,17 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             "yes",
         )
         self._gaia_listener_puesto = False
+        # Lo que mas tiempo real se lleva una conversacion no es ninguna espera
+        # nuestra: es el propio audio del reproductor sonando. Cada paso suelta
+        # el enunciado, luego la respuesta del altavoz, y mientras suenan el
+        # microfono esta deshabilitado y no hay nada que hacer salvo esperar.
+        # Acelerarlo recorta esa espera de verdad. Lo que se inyecta en el
+        # microfono queda fuera (ver __rosettaMicContext): el reconocedor tiene
+        # que oir la respuesta a velocidad normal. 1 lo apaga.
+        self.audio_speed = _leer_velocidad_audio()
+        # La actividad siguiente suele vivir en la misma leccion, y reabrirla es
+        # una recarga entera de la SPA. Ver _open_lesson.
+        self._leccion_abierta: tuple[str, str] | None = None
 
     def _on_gaia_request(self, request: Any) -> None:
         """Escribe un POST a gaia-server en el jsonl de captura. No debe fallar."""
@@ -680,6 +801,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             await self.page.context.grant_permissions(
                 ["microphone"], origin=LEARN_ORIGIN
             )
+            await self.page.add_init_script(_audio_speed_script(self.audio_speed))
             await self.page.add_init_script(_VIRTUAL_MIC_SCRIPT)
             await self.page.add_init_script(_REFERENCE_AUDIO_CAPTURE_SCRIPT)
             await self._open_lesson(course_title, lesson_title)
@@ -711,9 +833,16 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 return False
 
             if modo == "hablar":
+                await self.page.evaluate(_audio_speed_script(self.audio_speed))
                 await self.page.evaluate(_VIRTUAL_MIC_SCRIPT)
                 await self.page.evaluate(_REFERENCE_AUDIO_CAPTURE_SCRIPT)
                 await self._load_mic_check_audio()
+                # Primero el motor, después el modal. Al revés se pulsaba
+                # "Comenzar" sobre una pantalla que todavía estaba descargando
+                # y se acababa esperando 30 s a un botón que no podía
+                # habilitarse. Ver _wait_for_speech_engine.
+                if not await self._wait_for_speech_engine():
+                    return False
                 await self._dismiss_microphone_check()
             else:
                 self.logger.info(
@@ -740,6 +869,10 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             # Sube hasta ``complete_activity``, que reabre y reintenta. No se
             # traga aquí: es justo el fallo que sí vale la pena repetir.
             raise
+        except _MotorDeHablaNoCarga as exc:
+            # Aquí se para: reabrir devolvería la descarga a 0 %.
+            self.logger.error("  Conversación abandonada: %s", exc)
+            return False
         except PlaywrightTimeoutError as exc:
             self.logger.error("  Speech browser flow timed out: %s", exc)
             return False
@@ -748,6 +881,24 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             return False
 
     async def _open_lesson(self, course_title: str, lesson_title: str) -> None:
+        """Deja el mapa de esa leccion en pantalla, recargando solo si hace falta.
+
+        Abrir una conversacion costaba siempre una recarga entera de la SPA
+        —``goto`` + tarjeta de curso + tarjeta de leccion + mapa—, y las
+        conversaciones van por parejas dentro de la misma leccion
+        (``WithReco`` + ``WithoutReco``): la segunda repetia paso por paso la
+        navegacion que acababa de hacer la primera. Si el reproductor ya volvio
+        al mapa de esa misma leccion, no hay nada que abrir.
+
+        La condicion se comprueba mirando la pantalla, no fiandose de la nota:
+        si el mapa no esta visible —lo normal al salir de una actividad, y
+        siempre en el reintento del microfono— se navega como antes.
+        """
+        if await self._lesson_map_ready(course_title, lesson_title):
+            self.logger.info("  El mapa de la leccion ya esta abierto; no se recarga")
+            return
+
+        self._leccion_abierta = None
         await self.page.goto(LEARN_ORIGIN)
         courses = self.page.get_by_test_id("CourseDisplayerDiv")
         await courses.first.wait_for(state="visible", timeout=self.timeout_ms)
@@ -762,6 +913,17 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         await self.page.get_by_test_id("ActivityMapList").first.wait_for(
             state="visible", timeout=self.timeout_ms
         )
+        self._leccion_abierta = (course_title, lesson_title)
+
+    async def _lesson_map_ready(self, course_title: str, lesson_title: str) -> bool:
+        """Esta ya en pantalla el mapa de **esta** leccion?"""
+        if self._leccion_abierta != (course_title, lesson_title):
+            return False
+        try:
+            return await self.page.get_by_test_id("ActivityMapList").first.is_visible()
+        except Exception as error:  # noqa: BLE001 - ante la duda, se recarga
+            self.logger.debug("  No se pudo mirar el mapa de la leccion: %s", error)
+            return False
 
     async def _single_card(self, cards: Any, title: str, kind: str) -> Any:
         """La tarjeta que toca. Varias coincidencias no son un fallo.
@@ -981,6 +1143,12 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         await self._dump_screenshot("respuesta_no_aceptada")
         return False
 
+    # Aqui se llega justo despues de que el enunciado haya cambiado, asi que el
+    # paso siguiente ya esta pintado o no va a estarlo nunca. Los 15 s del
+    # sondeo general eran un peaje fijo al final de **cada** conversacion que
+    # termina antes de lo que dice la API — que es el caso normal.
+    _NEXT_STEP_PROBE_MS = 5_000
+
     async def _another_step_starts(
         self, step_number: int, modo: str = "hablar"
     ) -> bool:
@@ -997,7 +1165,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         senal = "SpeechButton" if modo == "hablar" else "ChoiceButton"
         try:
             await self.page.get_by_test_id(senal).first.wait_for(
-                state="visible", timeout=self.probe_timeout_ms
+                state="visible", timeout=self._NEXT_STEP_PROBE_MS
             )
             return True
         except PlaywrightTimeoutError:
@@ -1269,16 +1437,23 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         except PlaywrightTimeoutError:
             self.logger.debug("  El reproductor sigue con audio; se continúa")
 
+    _CLICK_PROBE_MS = 4_000
+
     async def _play_reference_audio(self, listen: Any) -> bool:
         """Hace sonar la respuesta, comprobando que de verdad suena."""
         # El clic por DOM va primero porque es el que acierta: en las trazas
         # resuelve en 0,5-2,5 s, mientras que el clic con ``force`` agota sus
         # 8 s casi siempre y solo después se probaba este. Ir en el otro orden
         # costaba ~8 s por paso comprando un fallo conocido.
+        # Un clic entra enseguida o no entra: lo que tarda es el reintento de
+        # Playwright contra una capa que se lo traga, y para eso ya esta la vía
+        # siguiente. Con el sondeo largo, las dos vias con ``force`` gastaban
+        # 15 s cada una y por dos pasadas: un minuto por paso comprando un
+        # fallo que el propio bucle ya sabe absorber.
         intentos = (
             ("el altavoz por DOM", lambda: listen.first.evaluate("el => el.click()")),
-            ("el altavoz", lambda: listen.first.click(force=True, timeout=self.probe_timeout_ms)),
-            ("el icono del altavoz", lambda: listen.first.get_by_test_id("SpeakerIcon").first.click(force=True, timeout=self.probe_timeout_ms)),
+            ("el altavoz", lambda: listen.first.click(force=True, timeout=self._CLICK_PROBE_MS)),
+            ("el icono del altavoz", lambda: listen.first.get_by_test_id("SpeakerIcon").first.click(force=True, timeout=self._CLICK_PROBE_MS)),
         )
         await self._wait_for_recognizer()
         # Dos pasadas: la primera puede caer mientras el reproductor todavía se
@@ -1477,7 +1652,12 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         try:
             await self.page.wait_for_function(
                 "() => !document.querySelector('[data-qa=\"CalibrationWindow\"]')",
-                timeout=self.timeout_ms,
+                # Es el mismo fallo que mide mic_enable_timeout_ms —el SRE no
+                # calibra— y tenia su propio presupuesto de 90 s por libre:
+                # FLUENCY_MIC_ENABLE_TIMEOUT_MS bajaba la espera del boton y
+                # esta se quedaba entera, asi que "fallar rapido" no fallaba
+                # rapido. Ahora las dos salen del mismo sitio.
+                timeout=self.mic_enable_timeout_ms,
             )
         except PlaywrightTimeoutError:
             estado = await self.page.evaluate(
@@ -1494,6 +1674,103 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             return False
         self.logger.info("  Comprobación de micrófono superada")
         return True
+
+    async def _speech_engine_state(self) -> dict | None:
+        """Estado de la carga del motor, o ``None`` si no está cargando.
+
+        Solo cuenta como "cargando" lo que trae la marca: con el guion sin
+        instalar, o si el reproductor cambia el texto, lo que toca es seguir
+        adelante y dejar que decida el botón — no quedarse esperando a una
+        carga que nadie ha dicho que exista.
+        """
+        try:
+            estado = await self.page.evaluate(
+                "() => window.__rosettaSpeechEngineState "
+                "? window.__rosettaSpeechEngineState() : null"
+            )
+        except Exception:  # noqa: BLE001 - preguntar nunca puede hundir el flujo
+            return None
+        if isinstance(estado, dict) and estado.get("cargando"):
+            return estado
+        return None
+
+    async def _wait_for_speech_engine(self) -> bool:
+        """Espera a que el reproductor acabe de cargar su motor de habla.
+
+        Es el arreglo de la causa que se había estado buscando en el audio.
+        Mientras el modal "Cargando motor de habla…N%" esté en pantalla, el
+        botón de micrófono **no puede** habilitarse, y el presupuesto que se le
+        daba (``timeout_ms // (mic_retries + 1)`` = 30 s) se agotaba a mitad de
+        la descarga. Peor: al agotarse se reabría la lección, que es una
+        navegación completa y devuelve la carga a 0 % — tres intentos de 30 s no
+        son 90 s de carga, son tres cargas abortadas.
+
+        Aquí se espera al **progreso**: mientras el porcentaje suba se sigue
+        esperando; solo se abandona si se queda parado ``engine_stall_ms`` o si
+        se pasa del techo ``engine_timeout_ms``. Devuelve ``False`` únicamente
+        cuando la carga se atascó de verdad, y ese caso **no se reintenta**:
+        reabrir tiraría el progreso conseguido.
+        """
+        estado = await self._speech_engine_state()
+        if estado is None:
+            return True
+
+        # El reloj es el sondeo acumulado, no el de pared: así "se quedó parado
+        # 45 s" significa 45 s de sondeos que vieron el mismo número, que es
+        # justo lo que se quiere medir, y el test puede reproducirlo sin dormir.
+        _PASO_MS = 1_000
+        transcurrido = 0
+        sin_avanzar = 0
+        desde_el_aviso = 0
+        pct = estado.get("pct")
+        self.logger.info(
+            "  El reproductor está cargando su motor de habla (%s%%); se espera "
+            "a que termine antes de tocar el micrófono",
+            pct if pct is not None else "?",
+        )
+        while True:
+            await self.page.wait_for_timeout(_PASO_MS)
+            transcurrido += _PASO_MS
+            sin_avanzar += _PASO_MS
+            desde_el_aviso += _PASO_MS
+            estado = await self._speech_engine_state()
+
+            if estado is None:
+                self.logger.info(
+                    "  Motor de habla cargado en %d s", transcurrido // 1_000
+                )
+                self._motor_cargado = True
+                return True
+
+            nuevo = estado.get("pct")
+            if nuevo is not None and (pct is None or nuevo > pct):
+                pct, sin_avanzar = nuevo, 0
+            if desde_el_aviso >= 15_000:
+                desde_el_aviso = 0
+                self.logger.info(
+                    "  Motor de habla al %s%% (%d s)",
+                    pct if pct is not None else "?",
+                    transcurrido // 1_000,
+                )
+
+            if sin_avanzar > self.engine_stall_ms:
+                self.logger.error(
+                    "  La carga del motor de habla se quedó parada en %s%% "
+                    "durante %d s: no es la calibración, es que no hay motor",
+                    pct if pct is not None else "?",
+                    sin_avanzar // 1_000,
+                )
+                await self._dump_screenshot("motor_de_habla_parado")
+                return False
+            if transcurrido > self.engine_timeout_ms:
+                self.logger.error(
+                    "  El motor de habla no acabó de cargar en %d s "
+                    "(iba por el %s%%)",
+                    transcurrido // 1_000,
+                    pct if pct is not None else "?",
+                )
+                await self._dump_screenshot("motor_de_habla_lento")
+                return False
 
     async def _wait_for_recognizer(self) -> None:
         """Espera a que el reconocedor termine de cargar su modelo.
@@ -1736,6 +2013,13 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         # perdía la actividad para nada. Sonda corta: si en ese rato no se ha
         # callado, la respuesta la da el botón, no otra espera larga.
         await self._wait_for_all_audio_to_stop(timeout_ms=self.probe_timeout_ms)
+        # El modal del motor no sale solo al abrir la actividad: la primera vez
+        # que se pide el micrófono también aparece. Preguntar es una evaluación
+        # que devuelve null cuando no está cargando, así que no cuesta nada.
+        if not await self._wait_for_speech_engine():
+            raise _MotorDeHablaNoCarga(
+                "el motor de habla no acabó de cargar"
+            ) from None
         # El reconocedor calibra ahora, ya sin el modal de comprobación, y con el
         # micrófono virtual en silencio cancela en bucle y el botón no se
         # habilita. Se le da señal durante la calibración (voz del mic-check en

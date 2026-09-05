@@ -29,7 +29,7 @@ Instrucciones y contexto para trabajar en este repositorio. Léeme primero.
 - **FastAPI** — servidor web (opcional, solo si usas interfaz web)
 - **Playwright** — automatización del navegador (Chromium/Chrome/Edge)
 - **Docker** — aislamiento de corridas (opcional, recomendado para la web)
-- **pytest** — tests (374 tests)
+- **pytest** — tests (392 tests)
 
 ---
 
@@ -63,7 +63,7 @@ uv run python -m Resolucion_script_rosseta
 
 Lee del `.env`. Primera ejecución lo crea interactivamente.
 
-### Tests — 374 tests, sin navegador ni contenedores
+### Tests — 392 tests, sin navegador ni contenedores
 
 ```bash
 uv run pytest -q
@@ -118,7 +118,7 @@ docs/
 ├── ARCHITECTURE.md       Modularización y capas
 └── FLUENCY_BUILDER.md    Detalles del producto Fluency
 
-tests/                    374 tests, por capas
+tests/                    392 tests, por capas
 ```
 
 ---
@@ -193,7 +193,10 @@ Van en `.env` o en `environment:` del compose.
 | `FLUENCY_TOTAL_COURSE_HOURS` | `70` | Horas de estudio fabricadas, repartidas entre lecciones/steps de la corrida |
 | `FLUENCY_SEND_USAGE_OVERHEAD` | `false` | `true` para enviar `AddUsageOverhead` (esquema ya capturado; falta confirmar que el servidor lo acepta) |
 | `FLUENCY_SPEECH_BROWSER` | `1` | `0` apaga la ruta de voz por navegador |
+| `FLUENCY_AUDIO_SPEED` | `2` | Velocidad del audio del reproductor en la ruta por navegador (1 = como antes, máx. 4). No toca el audio que se inyecta en el micrófono |
 | `FLUENCY_SPEECH_TRACE` | `0` | `1` graba una traza de Playwright por actividad de voz fallida |
+| `FLUENCY_SPEECH_ENGINE_TIMEOUT_MS` | `300000` | Techo de espera para que el reproductor cargue su motor de habla |
+| `FLUENCY_SPEECH_ENGINE_STALL_MS` | `45000` | Se abandona si el porcentaje de esa carga no sube en este tiempo |
 | `FLUENCY_BROWSER_EXTRA_TYPES` | vacío | Tipos extra a completar por navegador, separados por coma |
 | `STORIES_TARGET_HOURS` | `1` | Horas a acreditar por corrida de Stories |
 | `STORIES_CHUNK_MIN_SEC` | `300` | Tramo mínimo por envío de uso |
@@ -225,6 +228,48 @@ GraphQL numera unidades globalmente (0-19 entre 5 niveles), pero tracking espera
 ### Fluency: 1 lección por defecto
 
 `FLUENCY_MAX_LESSONS=1` en la CLI (conservador, para pruebas). Desde la UI se traduce a `"all"` (el perfil puede limitarlo). El default no se toca: CLI sigue siendo cautelosa.
+
+### El audio acelerado no toca el micrófono virtual
+
+Lo que más tarda una conversación por navegador no es ninguna espera nuestra:
+es el reproductor sonando. Cada paso suelta el enunciado y luego la respuesta
+del altavoz, y mientras suenan el micrófono va deshabilitado. `FLUENCY_AUDIO_SPEED`
+(2 por defecto) sube el `playbackRate` de ese audio desde los ganchos ya
+existentes.
+
+La línea que no se cruza es el audio que se inyecta en el micrófono: acelerar
+la voz que oye el reconocedor es garantizar que no la entienda. El gancho de
+`AudioBufferSourceNode.start` excluye lo que sale de *nuestro* `AudioContext`
+(`__rosettaMicContext`) y lo marcado con `__rosettaNoSpeed`. Los bytes que se
+capturan salen del buffer, no de la reproducción, así que la velocidad no los
+altera.
+
+### "El micrófono no se habilita" es el motor de habla, no la calibración
+
+Antes de dejar pulsar el micrófono, el reproductor descarga y arranca su motor
+de reconocimiento y lo anuncia con un porcentaje: *"Configurar micrófono ·
+Cargando motor de habla…28%"*. Mientras ese modal esté, el botón **no puede**
+habilitarse. Todo lo que parecía un fallo de calibración del SRE —`calibrateSaga`
+cancelándose cada 4,1 s— es eso: no hay motor con el que calibrar.
+
+Lo que lo volvía imposible era el presupuesto. La espera del micrófono son
+`timeout_ms // (mic_retries + 1)` = 30 s, y al agotarse se reabría la lección:
+una navegación completa que devuelve la carga a 0 %. Tres intentos de 30 s no
+son 90 s de carga, son **tres cargas abortadas**. Medido el 05-09-2026: al 28 %
+tras 30 s, o sea ~100 s de descarga.
+
+Por eso `_wait_for_speech_engine()` espera **al progreso**, no a un reloj:
+mientras el porcentaje suba se sigue esperando, y solo se abandona si se queda
+parado (`FLUENCY_SPEECH_ENGINE_STALL_MS`). Y su fallo lanza
+`_MotorDeHablaNoCarga`, que **no se reintenta** a propósito — reabrir tiraría lo
+descargado. Dos cosas que se dan por supuestas y no lo son: el contexto de
+Playwright nace sin caché (cada corrida paga la descarga entera) y una respuesta
+abortada a medias no se cachea, así que el reintento tampoco la aprovechaba.
+
+Y un detalle que ahorra trabajo: **acreditar no exige que el reconocedor
+entienda nada**. En `logs/runs/run_fluency6.log` los 9 pasos dicen "el
+reconocedor no lo entendió" y el servidor devuelve `percentComplete=1`. Solo
+hace falta que el botón se pueda pulsar y que el reproductor dé su veredicto.
 
 ### Stories acredita horas por otra API distinta
 
@@ -349,6 +394,7 @@ Un JSON tocado a mano en Windows lleva BOM. `json.load` revienta. Se lee con `en
 | Corrida detiene en una lección | `fluency_max_lessons` puesto | Saca el límite del perfil |
 | Lección en ~95% | Le quedan conversaciones (`DialogueExpression*`) | Son las únicas `ordering: tree`: no se acreditan por API, van por navegador. Ver `docs/FLUENCY_BUILDER.md` |
 | "el paso N no llegó a seleccionar ninguna respuesta" | El modal de micrófono está encima (`z-index: 7000`) | No es un problema de clics: mira el medidor en el log. Ver `docs/FLUENCY_BUILDER.md` |
+| "el micrófono no se habilitó a tiempo" | El motor de habla no acabó de cargar | No es la calibración ni el audio. Busca "Motor de habla al N%" en el log: si sube, deja que termine; si se queda parado, sube `FLUENCY_SPEECH_ENGINE_STALL_MS` |
 | Chips vuelven a `idle` tras reiniciar | Último estado vive en memoria | Sí, el progreso persiste en disco |
 | `Could not launch a browser` | No hay Chrome/Edge en el PATH | `uv run playwright install chromium` |
 | La UI no responde (Docker reinició) | Imagen vieja | Reconstruye: `docker compose up -d --build --force-recreate` |
@@ -361,7 +407,7 @@ Un JSON tocado a mano en Windows lleva BOM. `json.load` revienta. Se lee con `en
 uv run pytest -q
 ```
 
-374 tests. Ninguno abre navegador ni lanza contenedores:
+392 tests. Ninguno abre navegador ni lanza contenedores:
 - `FakeBackend` inyectado en tests de web
 - Tests de adapters mockean APIs
 - Todo se ejecuta en ~5 segundos

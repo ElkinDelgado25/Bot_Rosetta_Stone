@@ -56,12 +56,16 @@ class TestStepCount:
         assert _hay_otro(_Page(aparece=False)) is False
 
     def test_finding_out_does_not_cost_the_long_timeout(self):
-        """Eran 90 s por actividad, y siempre en la que ya había terminado."""
+        """Eran 90 s por actividad, y siempre en la que ya había terminado.
+
+        Ni siquiera el sondeo general: aquí se llega con el enunciado ya
+        cambiado, así que el paso siguiente está pintado o no llega nunca.
+        """
         page = _Page(aparece=False)
         speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
         asyncio.run(speech._another_step_starts(10))
-        assert page.boton.esperas == [speech.probe_timeout_ms]
-        assert speech.probe_timeout_ms < speech.timeout_ms
+        assert page.boton.esperas == [speech._NEXT_STEP_PROBE_MS]
+        assert speech._NEXT_STEP_PROBE_MS < speech.probe_timeout_ms < speech.timeout_ms
 
 
 class TestStepCountEligiendo:
