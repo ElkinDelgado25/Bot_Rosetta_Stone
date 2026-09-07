@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
@@ -137,6 +138,55 @@ class PlaywrightFluencyApiAdapter(FluencyApiPort, LoggingMixin):
             headers["authorization"] = authorization
         return headers
 
+    # Marcas de un error de red transitorio: si el mensaje trae una de estas,
+    # reintentar tiene sentido (el servidor o la ruta volverán en segundos).
+    _RED_TRANSITORIA = (
+        "getaddrinfo",
+        "enotfound",
+        "econnreset",
+        "econnrefused",
+        "etimedout",
+        "socket hang up",
+        "timeout",
+        "network",
+        "connection closed",
+        "connection reset",
+    )
+
+    async def _post_con_reintentos(self, payload, authorization, operation, intentos=4):
+        """POST a gaia reintentando los errores de red transitorios.
+
+        No reintenta ``TargetClosedError`` (navegador muerto = definitivo, sube
+        como ``BrowserGone``) ni errores HTTP (los mira ``response.ok`` en
+        ``_post``). Solo la red que hipa: DNS, reset, timeout.
+        """
+        for intento in range(intentos):
+            try:
+                return await self.request_context.post(
+                    GAIA_GRAPHQL_URL,
+                    headers=self._headers(authorization),
+                    data=payload,
+                )
+            except TargetClosedError as exc:
+                raise BrowserGone(f"llamando a {operation}") from exc
+            except Exception as exc:  # noqa: BLE001 - se filtra por el mensaje
+                mensaje = str(exc).lower()
+                transitorio = any(m in mensaje for m in self._RED_TRANSITORIA)
+                if not transitorio or intento == intentos - 1:
+                    raise
+                espera = 2 ** intento  # 1, 2, 4 s
+                self.logger.warning(
+                    "  Red transitoria en %s (%s); reintento %d/%d en %d s",
+                    operation,
+                    str(exc)[:80],
+                    intento + 1,
+                    intentos - 1,
+                    espera,
+                )
+                await asyncio.sleep(espera)
+        # Inalcanzable: el bucle o devuelve o relanza.
+        raise RuntimeError("reintentos agotados sin resultado ni excepción")
+
     async def _post(
         self, operation: str, query: str, variables: Dict[str, Any], authorization: str
     ) -> Dict[str, Any]:
@@ -151,12 +201,14 @@ class PlaywrightFluencyApiAdapter(FluencyApiPort, LoggingMixin):
         # porque ``application/`` no puede importar Playwright, y sin traducir
         # subía crudo hasta la CLI como un traceback que no mencionaba el
         # navegador por ninguna parte.
-        try:
-            response = await self.request_context.post(
-                GAIA_GRAPHQL_URL, headers=self._headers(authorization), data=payload
-            )
-        except TargetClosedError as exc:
-            raise BrowserGone(f"llamando a {operation}") from exc
+        # Un blip de red —DNS que no resuelve, conexión reseteada, timeout—
+        # mataba una corrida de horas de golpe (medido 05-09-2026: "getaddrinfo
+        # ENOTFOUND gaia-server" cortó la corrida en la lección 9 de 83). Esos
+        # errores son transitorios, así que se reintenta con backoff antes de
+        # rendirse. TargetClosedError NO se reintenta: es el navegador muerto,
+        # que sí es definitivo (BrowserGone). Un error HTTP tampoco: se mira
+        # abajo con response.ok.
+        response = await self._post_con_reintentos(payload, authorization, operation)
 
         if not response.ok:
             body = await response.text()
