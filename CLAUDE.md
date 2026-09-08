@@ -83,7 +83,7 @@ Abre http://127.0.0.1:8000. Corridas en cola (comparten navegador).
 docker compose up -d --build --force-recreate
 ```
 
-Abre http://127.0.0.1:8000. Cada corrida en su propio contenedor.
+Abre http://127.0.0.1:8005. Cada corrida en su propio contenedor.
 
 > **Siempre usa `--force-recreate`.** `--build` reconstruye la imagen pero deja el contenedor viejo, así que verías el código anterior sin saber por qué.
 

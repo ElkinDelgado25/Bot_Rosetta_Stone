@@ -64,7 +64,7 @@ corre en su propio contenedor**, todos a la vez.
 docker compose up -d --build --force-recreate
 ```
 
-Abre <http://127.0.0.1:8000>.
+Abre <http://127.0.0.1:8005>.
 
 > **`--force-recreate` no sobra.** `--build` reconstruye la imagen pero deja
 > corriendo el contenedor viejo, así que verías el código anterior sin entender
@@ -113,7 +113,7 @@ Por defecto, **todo lo que esté pendiente**: la ficha del usuario lo muestra co
 usuario:
 
 ```bash
-curl -X PATCH http://127.0.0.1:8000/api/profiles/<id> \
+curl -X PATCH http://127.0.0.1:8005/api/profiles/<id> \
   -H "Content-Type: application/json" -d '{"fluency_max_lessons": 3}'
 ```
 

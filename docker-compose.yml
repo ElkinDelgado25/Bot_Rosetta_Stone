@@ -6,10 +6,10 @@ services:
     restart: unless-stopped
 
     ports:
-      # Publicado solo en loopback. Cambiar a "8000:8000" lo expone a toda la
+      # Publicado solo en loopback. Cambiar a "8005:8000" lo expone a toda la
       # red local, y esta API puede lanzar contenedores: hazlo únicamente con
       # ROSETTA_WEB_TOKEN definido.
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8005:8000"
 
     environment:
       # Token compartido de la UI. Sin él la API queda abierta a quien alcance
