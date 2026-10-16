@@ -1,10 +1,10 @@
 """Fabricates AddProgress messages for Fluency Builder activities.
 
-One message per step. Answers are derived from the ``correct`` ids the platform
-itself ships in the content tree (see docs/FLUENCY_BUILDER.md). Fabrication is
-clean for multipleChoice / cloze / grammar-card steps; matching is best-effort
-from the correct pairs; writing (free-text) and vocabulary cards submit an
-attempt, which is enough when completion is gated on submission rather than score.
+One message per step, except vocabulary cards: those expand to one message per
+carousel word. Answers are derived from the ``correct`` ids the platform itself
+ships in the content tree (see docs/FLUENCY_BUILDER.md). Fabrication is clean
+for multipleChoice / cloze / grammar-card steps; matching is best-effort from
+the correct pairs; writing (free-text) and empty cards submit an attempt.
 """
 
 import uuid
@@ -36,21 +36,58 @@ class FluencyProgressBuilder:
     ) -> List[Dict[str, Any]]:
         """Build the list of step messages for a single activity.
 
-        ``next_duration_ms``, if given, is called once per emitted step to get
-        a realistic ``durationMs`` (see ``FluencyDurationCalculator``);
-        otherwise every step falls back to the flat ``DEFAULT_STEP_DURATION_MS``.
+        ``next_duration_ms``, if given, is called once per emitted message
+        (one per step, or one per carousel word on a vocabulary card);
+        otherwise every message falls back to ``DEFAULT_STEP_DURATION_MS``.
         """
         activity_attempt_id = str(uuid.uuid4())
+        messages: List[Dict[str, Any]] = []
+        for step in activity.steps:
+            if not step.step_id:
+                continue
+            messages.extend(
+                self._messages_for_step(
+                    sequence,
+                    activity,
+                    step,
+                    activity_attempt_id,
+                    next_duration_ms,
+                )
+            )
+        return messages
+
+    def _messages_for_step(
+        self,
+        sequence: FluencySequence,
+        activity: FluencyActivity,
+        step: FluencyStep,
+        activity_attempt_id: str,
+        next_duration_ms: Optional[Callable[[], int]],
+    ) -> List[Dict[str, Any]]:
+        def _duration() -> int:
+            return next_duration_ms() if next_duration_ms else DEFAULT_STEP_DURATION_MS
+
+        if (step.type or "").lower() == "card" and step.correct_answer_ids:
+            # Tarjeta de vocabulario: una palabra por carrusel. El reproductor
+            # acredita cada palabra con un answer compuesto ``SS:<id>:1:false``
+            # (capturado del tráfico real del reproductor, ver FLUENCY_BUILDER.md);
+            # el id suelto de la palabra dejaba la actividad en 1/N.
+            return [
+                self._build_step_message(
+                    sequence,
+                    activity,
+                    step,
+                    activity_attempt_id,
+                    _duration(),
+                    answers=[{"answer": f"SS:{word_id}:1:false", "correct": True}],
+                    score=1,
+                )
+                for word_id in step.correct_answer_ids
+            ]
         return [
             self._build_step_message(
-                sequence,
-                activity,
-                step,
-                activity_attempt_id,
-                duration_ms=next_duration_ms() if next_duration_ms else DEFAULT_STEP_DURATION_MS,
+                sequence, activity, step, activity_attempt_id, _duration()
             )
-            for step in activity.steps
-            if step.step_id
         ]
 
     def _build_step_message(
@@ -60,8 +97,11 @@ class FluencyProgressBuilder:
         step: FluencyStep,
         activity_attempt_id: str,
         duration_ms: int,
+        answers: Optional[List[Dict[str, Any]]] = None,
+        score: Optional[int] = None,
     ) -> Dict[str, Any]:
-        answers, score = self._answers_for(step)
+        if answers is None or score is None:
+            answers, score = self._answers_for(step)
         return {
             "userAgent": self.user_agent,
             "courseId": sequence.course_id,

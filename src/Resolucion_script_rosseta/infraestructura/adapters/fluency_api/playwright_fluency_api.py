@@ -118,8 +118,12 @@ class PlaywrightFluencyApiAdapter(FluencyApiPort, LoggingMixin):
         request_context: APIRequestContext,
         diagnostics_dir: Path | None = None,
     ):
+        from Resolucion_script_rosseta.infraestructura.core import get_base_dir
+
         self.request_context = request_context
-        self.diagnostics_dir = diagnostics_dir or Path("logs/diagnostics")
+        self.diagnostics_dir = diagnostics_dir or (
+            get_base_dir() / "logs" / "diagnostics"
+        )
 
     def _headers(self, authorization: Optional[str]) -> Dict[str, str]:
         headers = {

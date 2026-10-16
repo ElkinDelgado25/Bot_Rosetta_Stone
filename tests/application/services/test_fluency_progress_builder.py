@@ -86,6 +86,37 @@ class TestFluencyProgressBuilder:
         assert m["answers"] == []
         assert m["score"] == 1
 
+    def test_card_with_word_ids_emits_one_message_per_word(self):
+        """Una sola ficha card con 16 palabras dejaba getProgress en 1/16.
+
+        El answer es ``SS:<id>:1:false``, no el id suelto: capturado del tráfico
+        real del reproductor, que es la forma en que el servidor acredita cada
+        palabra del carrusel.
+        """
+        seq, act = _sequence(
+            [FluencyStep("step-card", "card", ["word-1", "word-2", "word-3"])]
+        )
+        msgs = FluencyProgressBuilder().build_activity_messages(seq, act)
+        assert len(msgs) == 3
+        assert {m["activityStepId"] for m in msgs} == {"step-card"}
+        assert [m["answers"] for m in msgs] == [
+            [{"answer": "SS:word-1:1:false", "correct": True}],
+            [{"answer": "SS:word-2:1:false", "correct": True}],
+            [{"answer": "SS:word-3:1:false", "correct": True}],
+        ]
+        assert len({m["activityStepAttemptId"] for m in msgs}) == 3
+        assert msgs[0]["activityAttemptId"] == msgs[1]["activityAttemptId"]
+
+    def test_card_word_messages_each_get_a_duration(self):
+        seq, act = _sequence(
+            [FluencyStep("step-card", "card", ["word-1", "word-2"])]
+        )
+        durations = iter([111, 222])
+        msgs = FluencyProgressBuilder().build_activity_messages(
+            seq, act, next_duration_ms=lambda: next(durations)
+        )
+        assert [m["durationMs"] for m in msgs] == [111, 222]
+
     def test_step_without_id_is_skipped(self):
         seq, act = _sequence(
             [FluencyStep(None, "card", []), FluencyStep("s2", "card", [])]

@@ -21,8 +21,12 @@ class PlaywrightFoundationsApiAdapter(FoundationsApiPort, LoggingMixin):
         request_context: APIRequestContext,
         diagnostics_dir: Path | None = None,
     ):
+        from Resolucion_script_rosseta.infraestructura.core import get_base_dir
+
         self.request_context = request_context
-        self.diagnostics_dir = diagnostics_dir or Path("logs/diagnostics")
+        self.diagnostics_dir = diagnostics_dir or (
+            get_base_dir() / "logs" / "diagnostics"
+        )
 
     async def get_course_menu(
         self, authorization: str, language_code: str

@@ -117,5 +117,7 @@ class TestNavegadorPerdido:
         api = _ApiQueSePierde(["s1", "s2"], falla_en=1)
         with pytest.raises(BrowserGone):
             _correr(_orquestador(api, _EstadoEspia()))
-        assert api.verificaciones == 0
+        # Una lectura de getProgress al arrancar para ver qué lecciones
+        # siguen huecas. _verify (después de enviar) no debe haberse llamado.
+        assert api.verificaciones == 1
 

@@ -17,6 +17,7 @@ Esperar solo al enunciado costaba 15 s por paso en las dos rutas.
 
 import asyncio
 
+import pytest
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
@@ -38,6 +39,12 @@ class _Boton:
     async def click(self, **kwargs):
         self.clicks += 1
 
+    async def count(self):
+        return 0
+
+    async def is_visible(self):
+        return False
+
 
 class _Page:
     """Un reproductor de mentira que cambia el botón antes que el enunciado.
@@ -47,10 +54,11 @@ class _Page:
     del botón — que es la señal con la que dejamos de esperar a ciegas.
     """
 
-    def __init__(self, avanza_tras=2, habilita=True, mueve_boton=True):
+    def __init__(self, avanza_tras=2, habilita=True, mueve_boton=True, etiqueta=None):
         self.avanza_tras = avanza_tras
         self.habilita = habilita
         self.mueve_boton = mueve_boton
+        self.etiqueta = etiqueta
         self.boton = _Boton()
         self.consultado = []
         self.esperas = []
@@ -63,6 +71,8 @@ class _Page:
         return None if self.boton.clicks >= self.avanza_tras else ANTES
 
     def _texto_boton(self):
+        if self.etiqueta:
+            return self.etiqueta
         if not self.mueve_boton:
             return "Enviar"
         return "Enviar" if self.boton.clicks == 0 else "Próximo paso"
@@ -150,4 +160,107 @@ class TestAdvance:
         speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
         assert asyncio.run(speech._advance_to_next_step(ANTES)) is False
         assert page.boton.clicks == speech.speech_attempts
+
+    def test_advance_does_not_click_omitir(self):
+        """Correspondence: pulsar Omitir dejaba la conversación Omitida a 0%.
+
+        Tras el paso 10 el botón decía Omitir. El clic saltaba el árbol y la
+        captura siguiente era ya el carrusel de vocabulario.
+        """
+        page = _Page(avanza_tras=99, etiqueta="Omitir")
+        assert _avanzar(page) is False
+        assert page.boton.clicks == 0
+
+    def test_advance_closes_the_mic_modal_before_clicking_next(self):
+        """Prospective Customer: '¡Eso es correcto!' y el modal tapa Próximo paso."""
+        page = _Page(avanza_tras=0)
+        speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
+        called = []
+
+        async def _cerrar():
+            called.append(1)
+            return False
+
+        speech._dismiss_microphone_check = _cerrar  # type: ignore[method-assign]
+        assert asyncio.run(speech._advance_to_next_step(ANTES)) is True
+        assert called == [1]
+
+    def test_advance_does_not_click_next_through_the_mic_modal(self):
+        """Sin cerrar CalibrationWindow, force-click a Próximo paso no avanza."""
+        from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
+            _MicNeverCalibrated,
+        )
+
+        page = _Page(avanza_tras=0)
+
+        class _Ventana:
+            async def count(self):
+                return 1
+
+            @property
+            def first(self):
+                return self
+
+            async def is_visible(self):
+                return True
+
+        def _by_id(test_id):
+            if test_id == "CalibrationWindow":
+                return _Ventana()
+            return page.boton
+
+        page.get_by_test_id = _by_id  # type: ignore[method-assign]
+        speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
+
+        async def _cerrar():
+            return False
+
+        speech._dismiss_microphone_check = _cerrar  # type: ignore[method-assign]
+        with pytest.raises(_MicNeverCalibrated):
+            asyncio.run(speech._advance_to_next_step(ANTES))
+
+    def test_a_mic_modal_that_appears_after_the_answer_retries_not_failed_advance(self):
+        """Prospective Customer: el modal sale encima de '¡Eso es correcto!'.
+
+        Si se comprueba CalibrationWindow solo al entrar, se clica Próximo paso
+        a través del modal, se anota 'no avanzó' y no hay reintento.
+        """
+        from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
+            _MicNeverCalibrated,
+        )
+
+        page = _Page(avanza_tras=99)
+
+        class _VentanaTardia:
+            async def count(self):
+                return 1 if page.boton.clicks >= 1 else 0
+
+            @property
+            def first(self):
+                return self
+
+            async def is_visible(self):
+                return page.boton.clicks >= 1
+
+        def _by_id(test_id):
+            if test_id == "CalibrationWindow":
+                return _VentanaTardia()
+            return page.boton
+
+        page.get_by_test_id = _by_id  # type: ignore[method-assign]
+        speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
+        speech.cargo_wav = False
+
+        async def _cerrar():
+            return False
+
+        async def _load():
+            speech.cargo_wav = True
+
+        speech._dismiss_microphone_check = _cerrar  # type: ignore[method-assign]
+        speech._load_mic_check_audio = _load  # type: ignore[method-assign]
+        with pytest.raises(_MicNeverCalibrated):
+            asyncio.run(speech._advance_to_next_step(ANTES))
+        assert speech.cargo_wav is True
+        assert page.boton.clicks >= 1
 

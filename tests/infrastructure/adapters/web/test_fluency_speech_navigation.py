@@ -9,6 +9,7 @@ in one run without the flow ever reaching the microphone.
 import asyncio
 
 import pytest
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
@@ -48,14 +49,31 @@ class _Button:
         self.owner.clicks.append(self.test_id)
 
 
+class _LessonFirst(_Element):
+    """``LessonDisplayer.first``: puede tardar más de un clic en el curso."""
+
+    def __init__(self, name, page):
+        super().__init__(name)
+        self.page = page
+
+    async def wait_for(self, state=None, timeout=None):
+        self.page.lesson_waits += 1
+        if self.page.lesson_waits <= self.page.lesson_display_fails:
+            raise PlaywrightTimeoutError("LessonDisplayer")
+
+
 class _Cards:
     """Una lista de tarjetas que sabe filtrarse por texto, como un Locator."""
 
 
-    def __init__(self, titles):
+    def __init__(self, titles, page=None):
         self.titles = titles
         self.matched = None
-        self.first = _Element(titles[0] if titles else None)
+        self.page = page
+        if page is not None:
+            self.first = _LessonFirst(titles[0] if titles else None, page)
+        else:
+            self.first = _Element(titles[0] if titles else None)
 
     def filter(self, has_text=None):
         found = _Cards([t for t in self.titles if has_text in t])
@@ -67,10 +85,12 @@ class _Cards:
 
 
 class _Page:
-    def __init__(self, courses, lessons):
+    def __init__(self, courses, lessons, lesson_display_fails=0):
+        self.lesson_waits = 0
+        self.lesson_display_fails = lesson_display_fails
         self.by_test_id = {
             "CourseDisplayerDiv": _Cards(courses),
-            "LessonDisplayer": _Cards(lessons),
+            "LessonDisplayer": _Cards(lessons, page=self),
             "ActivityMapList": _Element("map"),
         }
         self.visited = []
@@ -114,4 +134,22 @@ class TestOpenLesson:
     def test_a_course_that_is_not_there_is_an_error(self):
         with pytest.raises(RuntimeError, match="curso"):
             _open(["Otro curso"], ["Registration"])
+
+    def test_relanza_el_curso_si_las_lecciones_no_salen(self):
+        """Prospective Customer: un solo clic a LaunchCourseButton y 90 s muertos.
+
+        El catálogo de lecciones a veces no pinta; el segundo clic sí.
+        """
+        page = _Page(
+            ["Business (B1)"], ["Registration"], lesson_display_fails=1
+        )
+        speech = PlaywrightFluencySpeechPage(page)  # type: ignore[arg-type]
+        asyncio.run(speech._open_lesson("Business (B1)", "Registration"))
+        assert page.by_test_id["CourseDisplayerDiv"].matched.first.clicks == [
+            "LaunchCourseButton",
+            "LaunchCourseButton",
+        ]
+        assert page.by_test_id["LessonDisplayer"].matched.first.clicks == [
+            "LaunchButton"
+        ]
 

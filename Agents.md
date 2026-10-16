@@ -2,7 +2,7 @@
 
 Guía para trabajar en este repositorio. Complementa `docs/ARCHITECTURE.md`, que
 describe la modularización por capas; este archivo cubre el ciclo de ejecución,
-los comandos y las trampas del entorno.
+los comandos y las trampas del entorno, trabaja en este proyecto sin importar que.
 
 ## Qué es el proyecto
 

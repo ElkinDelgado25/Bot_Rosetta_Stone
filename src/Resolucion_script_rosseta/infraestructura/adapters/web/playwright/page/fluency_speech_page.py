@@ -8,10 +8,12 @@ audio into an in-page virtual microphone and lets the normal player submit it.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
 import re
+import struct
 import time
 from pathlib import Path
 from typing import Any
@@ -29,6 +31,108 @@ LEARN_ORIGIN = "https://learn.rosettastone.com"
 # antes. Se sube con FLUENCY_AUDIO_SPEED si se quiere apurar mas, o se pone a 1
 # para dejarlo como estaba.
 _DEFAULT_AUDIO_SPEED = 2.0
+
+
+def _volcar_audio_inyectado(body: bytes, logger: Any) -> None:
+    """Guarda el WAV que se inyectará al micrófono y resume su señal.
+
+    Diagnóstico (FLUENCY_DUMP_MIC_AUDIO=1): cuando el SRE devuelve
+    transcripciones vacías no dice por qué; un vistazo al WAV —silencio,
+    duración, pico, RMS— separa "audio roto" de "reconocedor sordo" sin
+    abrir la traza.
+    """
+    try:
+        from Resolucion_script_rosseta.infraestructura.core import get_base_dir
+
+        destino_dir = get_base_dir() / "logs" / "diagnostics"
+        destino_dir.mkdir(parents=True, exist_ok=True)
+        sello = time.strftime("%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}"
+        destino = destino_dir / f"mic_inject_{sello}.wav"
+        destino.write_bytes(body)
+        if len(body) > 44:
+            canales = struct.unpack_from("<H", body, 22)[0] or 1
+            tasa = struct.unpack_from("<I", body, 24)[0]
+            muestras = (len(body) - 44) // (2 * canales)
+            pcm = struct.unpack_from(f"<{muestras * canales}h", body, 44)
+            pico = max(abs(v) for v in pcm) if pcm else 0
+            rms = (sum(v * v for v in pcm) / len(pcm)) ** 0.5 if pcm else 0.0
+            milisegundos = (muestras * 1000.0 / tasa) if tasa else 0.0
+            logger.info(
+                "  [volcado] audio al micrófono: %.0f ms, canales=%d, "
+                "tasa=%d, pico=%d/32767, rms=%.0f -> %s",
+                milisegundos,
+                canales,
+                tasa,
+                pico,
+                rms,
+                destino.name,
+            )
+    except Exception as error:  # noqa: BLE001 - es diagnóstico, nunca hunde
+        logger.debug("  [volcado] no se pudo guardar el audio: %s", error)
+
+
+def _normalizar_texto(texto: Any) -> str:
+    return re.sub(r"\s+", " ", str(texto or "")).strip().casefold()
+
+
+def _opcion_objetivo(textos_visibles: list, pasos: list) -> dict | None:
+    """Qué tarjeta hay que hablar cuando el paso acepta una sola respuesta.
+
+    En casi todo el diálogo las tres opciones continúan el árbol, pero los
+    pasos de cierre aceptan solo una (``postProcess.successResponses``) y
+    hablar cualquier otra corta la conversación: el reproductor pasa a la
+    actividad siguiente y la plataforma marca la conversación como omitida
+    (``percentComplete`` 0 aunque los pasos previos se contestaran bien).
+
+    Se localiza el paso por el texto visible de las tarjetas y, si está
+    restringido, se devuelve la opción aceptada. ``None`` significa "cualquier
+    opción vale" (o no se reconoció el paso): se mantiene la primera tarjeta.
+    """
+    visibles = [t for t in (_normalizar_texto(x) for x in textos_visibles) if t]
+    if not visibles or not pasos:
+        return None
+    candidatos = []
+    for paso in pasos:
+        opciones = paso.get("options") or []
+        por_texto = {}
+        for opcion in opciones:
+            texto = _normalizar_texto(opcion.get("text"))
+            if texto:
+                por_texto.setdefault(texto, opcion)
+        if por_texto and all(t in por_texto for t in visibles):
+            candidatos.append((opciones, por_texto, set(paso.get("success_ids") or [])))
+    if not candidatos:
+        return None
+    permitidas = None
+    for _opciones, _por_texto, aceptadas in candidatos:
+        permitidas = aceptadas if permitidas is None else (permitidas & aceptadas)
+    opciones, _, _ = candidatos[0]
+    if not permitidas or len(permitidas) >= len(opciones):
+        return None
+    # La tarjeta a hablar tiene que ser una de las visibles: se recorre el
+    # orden del DOM, que es el índice con el que después se pulsa.
+    for _opciones, por_texto, _ in candidatos:
+        for indice, texto in enumerate(visibles):
+            opcion = por_texto.get(texto)
+            if opcion is not None and opcion.get("id") in permitidas:
+                return {
+                    "indice": indice,
+                    "texto": opcion.get("text"),
+                    "id": opcion.get("id"),
+                    "sha": opcion.get("sha"),
+                }
+    # Ninguna tarjeta visible es la aceptada (texto recortado, tipografía
+    # distinta): se devuelve la opción aceptada sin índice para buscarla por
+    # el sha de su audio.
+    objetivo = next((o for o in opciones if o.get("id") in permitidas), None)
+    if objetivo is None:
+        return None
+    return {
+        "indice": None,
+        "texto": objetivo.get("text"),
+        "id": objetivo.get("id"),
+        "sha": objetivo.get("sha"),
+    }
 
 
 class _MicNeverCalibrated(Exception):
@@ -211,47 +315,26 @@ _VIRTUAL_MIC_SCRIPT = r"""
     asegurarContexto().then(() => {
       if (window.__rosettaMicNoise !== "arrancando") return;
 
-      if (window.__rosettaMicCheckBuffer) {
-        const fuente = state.context.createBufferSource();
-        const volumen = state.context.createGain();
-        fuente.buffer = window.__rosettaMicCheckBuffer;
-        fuente.loop = true;
-        // El medidor de la comprobación necesita NIVEL: con 1.75 solo se
-        // encendía 1 de 10 barras y la prueba no pasaba (medido 05-09-2026).
-        // Se sube con margen; el reconocedor real oye el audio inyectado
-        // aparte, así que aquí lo único que importa es llenar las barras.
-        // Tunable por ventana para iterar sin recompilar.
-        // La comprobación es de una actividad WithReco: RECONOCE el "1,2,3,4,5",
-        // no solo mide nivel. Saturar el audio (gain alto) llenaba el medidor
-        // pero lo volvía irreconocible y la comprobación no pasaba. Con el track
-        // ya vivo, lo que hace falta es audio LIMPIO a nivel natural: un empujón
-        // suave sin recortar. Tunable por ventana para calibrarlo fino.
-        volumen.gain.value = window.__rosettaMicCheckGain || 1.0;
-        fuente.connect(volumen);
-        volumen.connect(state.bus);
-        fuente.start();
-        window.__rosettaMicNoise = { fuentes: [fuente], volumen, modo: "file" };
+      if (!window.__rosettaMicCheckBuffer) {
+        // Un tono llena el medidor (10/10) y el SRE no reconoce "1, 2, 3, 4, 5".
+        // Sin grabación no hay señal que merezca la pena inyectar.
+        window.__rosettaMicCheckMode = "missing";
+        window.__rosettaMicNoise = null;
         return;
       }
-
-      window.__rosettaMicCheckMode = "tone";
+      const fuente = state.context.createBufferSource();
       const volumen = state.context.createGain();
-      const filtro = state.context.createBiquadFilter();
-      const fuentes = [220, 440, 660].map((frecuencia) => {
-        const osc = state.context.createOscillator();
-        osc.type = "square";
-        osc.frequency.value = frecuencia;
-        osc.connect(filtro);
-        return osc;
-      });
-      filtro.type = "bandpass";
-      filtro.frequency.value = 520;
-      filtro.Q.value = 0.9;
-      volumen.gain.value = 0.85;
-      filtro.connect(volumen);
+      fuente.buffer = window.__rosettaMicCheckBuffer;
+      fuente.loop = true;
+      // La comprobación es de una actividad WithReco: RECONOCE el "1,2,3,4,5",
+      // no solo mide nivel. Saturar el audio (gain alto) llenaba el medidor
+      // pero lo volvía irreconocible. Audio limpio a nivel natural.
+      volumen.gain.value = window.__rosettaMicCheckGain || 1.0;
+      fuente.connect(volumen);
       volumen.connect(state.bus);
-      for (const osc of fuentes) osc.start();
-      window.__rosettaMicNoise = { fuentes, volumen, modo: "tone" };
+      fuente.start();
+      window.__rosettaMicCheckMode = "file";
+      window.__rosettaMicNoise = { fuentes: [fuente], volumen, modo: "file" };
     }).catch(() => { window.__rosettaMicNoise = null; });
     return true;
   };
@@ -538,7 +621,12 @@ _REFERENCE_AUDIO_CAPTURE_SCRIPT = r"""
     const originalStart = AudioBufferSourceNode.prototype.start;
     AudioBufferSourceNode.prototype.start = function(...args) {
       try {
-        if (this.buffer && this.buffer.length > 0) {
+        // El contexto del microfono virtual (voz inyectada y linea de
+        // calibracion) no es audio del reproductor: si se cuela aqui, el
+        // audio de reserva pasa a ser el mic-check y todos los pasos
+        // inyectan el mismo clip, sin reconocimiento posible.
+        if (this.buffer && this.buffer.length > 0
+            && this.context !== window.__rosettaMicContext) {
           const bytes = bytesPorBuffer.get(this.buffer) || bufferAWav(this.buffer);
           window.__rosettaLastPlayedAudio = bytes;
           // Este nunca se reinicia: es la red de seguridad cuando el altavoz
@@ -584,9 +672,23 @@ _REFERENCE_AUDIO_CAPTURE_SCRIPT = r"""
 
   const originalPlay = HTMLMediaElement.prototype.play;
   HTMLMediaElement.prototype.play = function(...args) {
+    // Se cuentan TODAS las reproducciones: la captura de la respuesta espera
+    // una jugada nueva despues del clic, y sin el contador no se distingue del
+    // enunciado que ya venia sonando.
+    try { window.__rosettaPlayCount = (window.__rosettaPlayCount || 0) + 1; } catch (e) {}
     if (window.__rosettaCaptureReference === true) {
       const source = this.currentSrc || this.src;
-      if (source) window.__rosettaReferenceAudioUrl = source;
+      if (source) {
+        window.__rosettaReferenceAudioUrl = source;
+        // Con el momento de la jugada y el del clic se puede elegir la
+        // respuesta pulsada aunque el SRE reproduzca su propio prompt
+        // (SpeechPrompt.mp3) despues del clic y tape la URL.
+        try {
+          (window.__rosettaPlayLog = window.__rosettaPlayLog || []).push(
+            { u: source, t: Date.now() }
+          );
+        } catch (e) {}
+      }
     }
     // Misma idea que en AudioBufferSourceNode.start: el microfono virtual no
     // pasa por HTMLMediaElement, asi que aqui no hay nada que excluir.
@@ -680,6 +782,10 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         self.speech_attempts = max(1, speech_attempts)
         # Ver _wait_for_recognizer: se rearma al empezar cada actividad.
         self._reconocedor_mudo = False
+        # Los pasos del árbol con sus opciones (texto visible + sha del audio) y
+        # los ids aceptados: con esto se elige qué tarjeta hablar en los pasos
+        # que solo aceptan una respuesta. Lo fija `_complete_activity`.
+        self._pasos_secuencia: list = []
         # Carga del motor de habla. Es la causa real de "el micrófono no se
         # habilita" (auditoría 05-09-2026): el modal se queda en "Cargando
         # motor de habla…28%" y el botón no puede habilitarse porque no hay
@@ -745,7 +851,36 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 "url": url,
                 "body": cuerpo,
             }
-            destino = Path("logs/diagnostics") / "gaia_capture.jsonl"
+            from Resolucion_script_rosseta.infraestructura.core import get_base_dir
+
+            destino = get_base_dir() / "logs" / "diagnostics" / "gaia_capture.jsonl"
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            with destino.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(registro, ensure_ascii=False) + "\n")
+        except Exception:  # noqa: BLE001 - es diagnóstico, nunca hunde la corrida
+            pass
+
+    def _on_gaia_response(self, response: Any) -> None:
+        """Registra la respuesta del servidor a un POST de gaia. No debe fallar."""
+        try:
+            if response.request.method != "POST" or "gaia-server" not in response.url:
+                return
+            asyncio.ensure_future(self._log_gaia_response(response))
+        except Exception:  # noqa: BLE001 - es diagnóstico, nunca hunde la corrida
+            pass
+
+    async def _log_gaia_response(self, response: Any) -> None:
+        try:
+            cuerpo = await response.text()
+            registro = {
+                "t": time.strftime("%H:%M:%S"),
+                "status": response.status,
+                "url": response.url,
+                "body": cuerpo[:200000],
+            }
+            from Resolucion_script_rosseta.infraestructura.core import get_base_dir
+
+            destino = get_base_dir() / "logs" / "diagnostics" / "gaia_responses.jsonl"
             destino.parent.mkdir(parents=True, exist_ok=True)
             with destino.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(registro, ensure_ascii=False) + "\n")
@@ -756,6 +891,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         if not self._capturar_gaia or self._gaia_listener_puesto:
             return
         self.page.on("request", self._on_gaia_request)
+        self.page.on("response", self._on_gaia_response)
         self._gaia_listener_puesto = True
         self.logger.info("  [captura] registrando POSTs a gaia-server del reproductor")
 
@@ -766,6 +902,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         lesson_title: str,
         activity_id: str,
         expected_steps: int,
+        steps: list | None = None,
     ) -> bool:
         """Completa la conversación, grabando la sesión si se pidió traza.
 
@@ -773,6 +910,10 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         Rosetta): cada intento reabre la actividad desde el mapa, que re-dispara
         la calibración. El resto de fallos no se reintentan — no cambian al
         repetirlos.
+
+        ``steps`` son las opciones del árbol (texto visible y sha del audio por
+        opción, más los ids aceptados): los pasos de cierre aceptan una sola
+        respuesta y sin esto se habla una tarjeta al azar.
         """
         await self._attach_gaia_capture()
         for intento in range(1, self.mic_retries + 2):
@@ -785,6 +926,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                     lesson_title=lesson_title,
                     activity_id=activity_id,
                     expected_steps=expected_steps,
+                    steps=steps,
                 )
                 return completed
             except _MicNeverCalibrated:
@@ -824,7 +966,12 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         if not tracing:
             return
         try:
-            if completed:
+            guardar_todo = os.getenv("FLUENCY_SPEECH_TRACE_ALL", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            if completed and not guardar_todo:
                 await self.page.context.tracing.stop()
                 return
             self.trace_dir.mkdir(parents=True, exist_ok=True)
@@ -846,7 +993,9 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         lesson_title: str,
         activity_id: str,
         expected_steps: int,
+        steps: list | None = None,
     ) -> bool:
+        self._pasos_secuencia = list(steps or [])
         try:
             await self.page.context.grant_permissions(
                 ["microphone"], origin=LEARN_ORIGIN
@@ -855,24 +1004,47 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             await self.page.add_init_script(_VIRTUAL_MIC_SCRIPT)
             await self.page.add_init_script(_REFERENCE_AUDIO_CAPTURE_SCRIPT)
             await self._open_lesson(course_title, lesson_title)
+            await self._volcar_mapa_actividades()
 
             complete_marker = self.page.locator(
                 f'[data-qa="activity_{activity_id}_correctly_completed"], '
                 f'[data-qa="activity_{activity_id}_completed"]'
             )
-            if await complete_marker.count():
+            # El mapa pinta la misma conversación dos veces (abre y cierra la
+            # lección, mismo activityId). countOfActivities cuenta las dos;
+            # getProgress solo lista el id una vez. Una copia marcada no basta:
+            # si queda un hueco ``activity_{id}`` hay que jugarlo, o la lección
+            # se queda en 16/17.
+            activity = self.page.get_by_test_id(f"activity_{activity_id}")
+            n_huecos = await activity.count()
+            if await complete_marker.count() and not n_huecos:
                 self.logger.info("  Speech activity already complete in lesson map")
                 return True
 
-            # El mapa pinta la misma actividad dos veces (medido en una
-            # corrida real): sin ``.first`` esperarla es una violación de
-            # modo estricto que tumba la actividad entera.
-            activity = self.page.get_by_test_id(f"activity_{activity_id}").first
-            await activity.wait_for(state="visible", timeout=self.timeout_ms)
-            # The horizontal activity map places a transparent drag layer above
-            # its items. Dispatching the click to the known data-qa target is the
-            # same user action without relying on coordinates.
-            await activity.click(force=True)
+            # La ranura extra es la de cierre (derecha). ``.first`` reabre la
+            # de apertura. Si no hay hueco visible pero el DOM aún tiene
+            # ``activity_{id}`` (copia bloqueada junto a Resumen), un skip
+            # deja count 17 con 16 acreditadas: se force-clica con la sonda
+            # corta, no se espera 90 s.
+            elegido = None
+            for indice in range(n_huecos - 1, -1, -1):
+                cand = activity.nth(indice)
+                if await cand.is_visible():
+                    elegido = cand
+                    break
+            if elegido is None:
+                elegido = activity.last
+                try:
+                    await elegido.click(force=True, timeout=self.probe_timeout_ms)
+                except Exception:
+                    if await complete_marker.count():
+                        self.logger.info(
+                            "  Speech activity already complete in lesson map"
+                        )
+                        return True
+                    raise
+            else:
+                await elegido.click(force=True)
 
             modo = await self._input_mode()
             if modo == "desconocido":
@@ -899,6 +1071,13 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                     "  Conversación sin reconocimiento: se responde eligiendo, "
                     "no hablando"
                 )
+                # Prospective Customer: el modal no está al abrir; sale encima
+                # de "¡Eso es correcto!" al marcar. Sin el WAV el medidor se
+                # queda a 1/10. Cargar ahora no espera el motor (eso eran
+                # los 90 s); solo deja lista la voz de "1 2 3 4 5".
+                await self.page.evaluate(_VIRTUAL_MIC_SCRIPT)
+                await self._load_mic_check_audio()
+                await self._dismiss_microphone_check()
 
             for step_number in range(1, max(1, expected_steps) + 1):
                 resuelto = (
@@ -930,6 +1109,39 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             self.logger.error("  Speech browser flow failed: %s", exc)
             return False
 
+    async def _volcar_mapa_actividades(self) -> None:
+        """Inventario de una línea de las ranuras ``activity_*`` del mapa.
+
+        Los count gaps (16/17, 12/13) vienen de una copia con el id duplicado
+        del diálogo de cierre en la definición v2; el mapa pinta esa copia dos
+        veces. Esta línea deja ver el patrón si aparece una lección nueva con
+        el mismo hueco, sin inundar el log.
+        """
+        try:
+            marcas = await self.page.evaluate(
+                """() => Array.from(
+                    document.querySelectorAll('[data-qa^="activity_"]')
+                ).map((el) => el.getAttribute('data-qa'))"""
+            )
+        except Exception as error:  # noqa: BLE001 - es diagnóstico
+            self.logger.debug("  No se pudo inventariar el mapa: %s", error)
+            return
+        bases: dict[str, int] = {}
+        for marca in marcas or []:
+            base = marca
+            for sufijo in ("_correctly_completed", "_completed"):
+                if base.endswith(sufijo):
+                    base = base[: -len(sufijo)]
+                    break
+            bases[base] = bases.get(base, 0) + 1
+        repetidos = {b: n for b, n in bases.items() if n > 1}
+        self.logger.info(
+            "  Mapa de la lección: %d ranuras (%d ids únicos)%s",
+            len(marcas or []),
+            len(bases),
+            f"; repetidos: {repetidos}" if repetidos else "",
+        )
+
     async def _open_lesson(self, course_title: str, lesson_title: str) -> None:
         """Deja el mapa de esa leccion en pantalla, recargando solo si hace falta.
 
@@ -954,10 +1166,35 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         await courses.first.wait_for(state="visible", timeout=self.timeout_ms)
 
         course = await self._single_card(courses, course_title, "curso")
-        await course.get_by_test_id("LaunchCourseButton").first.click()
-
         lessons = self.page.get_by_test_id("LessonDisplayer")
-        await lessons.first.wait_for(state="visible", timeout=self.timeout_ms)
+        ultimo: PlaywrightTimeoutError | None = None
+        for intento in range(1, 3):
+            try:
+                await course.get_by_test_id("LaunchCourseButton").first.click(
+                    timeout=self.probe_timeout_ms
+                )
+            except PlaywrightTimeoutError:
+                self.logger.info(
+                    "  LaunchCourseButton ya no está (intento %d); "
+                    "se espera el catálogo de lecciones",
+                    intento,
+                )
+            try:
+                await lessons.first.wait_for(
+                    state="visible", timeout=self.timeout_ms
+                )
+                ultimo = None
+                break
+            except PlaywrightTimeoutError as exc:
+                ultimo = exc
+                self.logger.info(
+                    "  El catálogo de lecciones no apareció (intento %d); "
+                    "se pulsa el curso otra vez",
+                    intento,
+                )
+        if ultimo is not None:
+            await self._dump_screenshot("sin_lesson_displayer")
+            raise ultimo
         lesson = await self._single_card(lessons, lesson_title, "lección")
         await lesson.get_by_test_id("LaunchButton").first.click()
         await self.page.get_by_test_id("ActivityMapList").first.wait_for(
@@ -997,7 +1234,19 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
 
     async def _complete_visible_step(self, step_number: int) -> bool:
         prompt = self.page.get_by_test_id("PromptText").first
-        previous_prompt = (await prompt.text_content() or "").strip()
+        try:
+            previous_prompt = (await prompt.text_content() or "").strip()
+        except PlaywrightTimeoutError:
+            # El paso anterior cerró el reproductor. `_another_step_starts`
+            # debería haberlo visto; si no, el SpeechButton residual nos trajo
+            # aquí. No es un fallo: no hay enunciado que contestar.
+            if step_number > 1:
+                self.logger.info(
+                    "  La conversación se acabó en el paso %d (no hay enunciado)",
+                    step_number - 1,
+                )
+                return True
+            raise
         choices = self.page.get_by_test_id("ChoiceButton")
         if await choices.count() == 0:
             self.logger.error("  Speech step %d has no choices", step_number)
@@ -1006,7 +1255,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         # El modal de micrófono puede aparecer al entrar en el paso, no solo al
         # abrir la actividad: se intenta cerrar en cada uno.
         await self._dismiss_microphone_check()
-        choice = choices.first
+        choice = await self._tarjeta_a_hablar(choices)
         audio = await self._capture_choice_audio(choice)
         await self._wait_for_silence()
         # Marcar la respuesta ayuda, pero **no es obligatorio**: en esta
@@ -1034,11 +1283,129 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             return False
         return True
 
+    async def _tarjeta_a_hablar(self, choices: Any) -> Any:
+        """La tarjeta cuya voz se inyecta en este paso.
+
+        Por defecto la primera —en la mayoría del diálogo las tres continúan el
+        árbol—, pero en los pasos de cierre solo una respuesta sigue la
+        conversación: hablar cualquier otra la corta y la plataforma marca la
+        actividad como omitida (``percentComplete`` 0 con los pasos previos
+        bien contestados). Se localiza la tarjeta aceptada por su texto visible
+        y, si el texto no casa, por el sha de su audio.
+        """
+        primera = choices.first
+        if not self._pasos_secuencia:
+            return primera
+        try:
+            total = await choices.count()
+            textos = []
+            for indice in range(total):
+                nodo = choices.nth(indice).get_by_test_id("ChoiceText")
+                texto = (
+                    (await nodo.first.text_content() or "").strip()
+                    if await nodo.count()
+                    else ""
+                )
+                textos.append(texto)
+            objetivo = _opcion_objetivo(textos, self._pasos_secuencia)
+            if not objetivo:
+                return primera
+            self.logger.info(
+                "  Paso con respuesta única; se habla la opción aceptada %r",
+                objetivo.get("texto"),
+            )
+            indice = objetivo.get("indice")
+            if indice is not None:
+                return choices.nth(min(int(indice), total - 1))
+            por_sha = await self._tarjeta_por_sha(choices, objetivo.get("sha"))
+            if por_sha is not None:
+                return por_sha
+        except Exception as error:  # noqa: BLE001 - la primera tarjeta siempre vale
+            self.logger.debug("  No se pudo elegir la tarjeta aceptada: %s", error)
+        return primera
+
+    async def _tarjeta_por_sha(self, choices: Any, sha: Any) -> Any:
+        """La tarjeta cuyo audio lleva ese sha, oyendo el altavoz de cada una.
+
+        El sha es el nombre del recurso en ``resources.rosettastone.com`` y
+        aparece al final de la URL que el reproductor pone en marcha: pulsando
+        cada altavoz y leyendo la última jugada se mapea tarjeta -> opción sin
+        depender del texto visible.
+        """
+        if not sha:
+            return None
+        total = await choices.count()
+        for indice in range(total):
+            tarjeta = choices.nth(indice)
+            listen = tarjeta.get_by_test_id("ListenButton")
+            if await listen.count() == 0:
+                continue
+            jugadas_antes = await self._reproducciones()
+            await self.page.evaluate(
+                "() => { window.__rosettaPlayLog = []; "
+                "window.__rosettaClickAt = 0; "
+                "window.__rosettaCaptureReference = true; }"
+            )
+            try:
+                if not await self._play_reference_audio(listen):
+                    continue
+                await self._esperar_jugada_del_clic(jugadas_antes)
+                url = await self._ultima_url_reproducida()
+            finally:
+                await self.page.evaluate(
+                    "() => { window.__rosettaCaptureReference = false; }"
+                )
+            if sha in (url or ""):
+                self.logger.info(
+                    "  La tarjeta aceptada se localizó por el sha de su audio"
+                )
+                return tarjeta
+        return None
+
+    async def _ultima_url_reproducida(self) -> str:
+        try:
+            return str(
+                await self.page.evaluate(
+                    "() => { const log = window.__rosettaPlayLog || []; "
+                    "const ultimo = log[log.length - 1]; "
+                    "return ultimo && ultimo.u ? ultimo.u : ''; }"
+                )
+            )
+        except Exception:  # noqa: BLE001 - solo alimenta el mapeo por sha
+            return ""
+
     # Tras un clic, el reproductor cambia *algo* en menos de un segundo: o el
     # enunciado (avanzó) o el texto del botón (registró la pulsación). Cuatro
     # segundos son de sobra; lo que sobraba eran los quince que se esperaban
     # antes por no mirar el botón.
     _ADVANCE_PROBE_MS = 4_000
+
+    async def _calibration_window_visible(self) -> bool:
+        ventana = self.page.get_by_test_id("CalibrationWindow")
+        try:
+            return bool(await ventana.count()) and await ventana.first.is_visible()
+        except Exception:  # noqa: BLE001 - si no se puede mirar, no está
+            return False
+
+    async def _handle_late_microphone_check(self) -> None:
+        """Cierra el modal si aparece encima de *Próximo paso* a mitad de paso.
+
+        En WithoutReco no está al abrir la actividad: sale tras marcar, con
+        el medidor a 1/10 si no hay WAV. Force-click no avanza; 'no avanzó'
+        tampoco reintenta. Hay que armar la voz y, si sigue, relanzar.
+        """
+        if not await self._calibration_window_visible():
+            await self._dismiss_microphone_check()
+            if not await self._calibration_window_visible():
+                return
+        try:
+            await self.page.evaluate(_VIRTUAL_MIC_SCRIPT)
+        except Exception:  # noqa: BLE001 - el WAV aún puede cargarse
+            pass
+        await self._load_mic_check_audio()
+        await self._dismiss_microphone_check()
+        if await self._calibration_window_visible():
+            raise _MicNeverCalibrated("el modal de micrófono tapa Próximo paso")
 
     async def _advance_to_next_step(self, previous_prompt: str) -> bool:
         """Pulsa hasta que el enunciado cambie, mirando qué pasa entre clics.
@@ -1054,9 +1421,15 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         El primer clic no se pierde, gasta una transición distinta.)
 
         Se mira el enunciado **antes** de cada pulsación, así que en cuanto ha
-        avanzado ya no se pulsa más. Eso es lo que impide el fallo peligroso:
-        un clic de más caería sobre el "Omitir" del paso siguiente y lo saltaría
-        sin contestarlo.
+        avanzado ya no se pulsa más. Si el botón ya dice Omitir/Skip, tampoco
+        se pulsa: en Correspondence ese clic saltaba el árbol y getProgress
+        se quedaba en 0.
+
+        El modal de micrófono (z-index 7000) tapa *Próximo paso*: en
+        Prospective Customer la respuesta ya decía "¡Eso es correcto!" y el
+        avance se daba por fallido. Hay que cerrarlo antes de pulsar. Si sigue
+        encima, force-click no avanza: se reintenta la actividad. El modal
+        puede aparecer *después* de marcar, así que se mira en cada intento.
         """
         estado = (
             "() => { const p = document.querySelector('[data-qa=PromptText]'); "
@@ -1070,10 +1443,17 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         boton = self.page.get_by_test_id("SubmitButton").first
 
         for _ in range(self.speech_attempts):
+            await self._handle_late_microphone_check()
             antes = await self.page.evaluate(estado)
             # Ya estamos en el paso siguiente: pulsar ahora sería saltárselo.
             if antes["prompt"] is None or antes["prompt"] != previous_prompt:
                 return True
+            if self._is_skip_label(antes.get("boton")):
+                self.logger.info(
+                    "  SubmitButton dice %s; no se pulsa (omitiría el paso)",
+                    antes.get("boton"),
+                )
+                return False
 
             try:
                 await self.page.wait_for_function(
@@ -1177,6 +1557,17 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 )
 
             veredicto = await self._submit_verdict()
+            if os.getenv("FLUENCY_SPEECH_DEBUG", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            ):
+                self.logger.info(
+                    "  [debug] veredicto paso %d intento %d: %s",
+                    step_number,
+                    intento,
+                    veredicto,
+                )
             if veredicto == "aceptada":
                 return True
             self.logger.info(
@@ -1193,12 +1584,6 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         await self._dump_screenshot("respuesta_no_aceptada")
         return False
 
-    # Aqui se llega justo despues de que el enunciado haya cambiado, asi que el
-    # paso siguiente ya esta pintado o no va a estarlo nunca. Los 15 s del
-    # sondeo general eran un peaje fijo al final de **cada** conversacion que
-    # termina antes de lo que dice la API — que es el caso normal.
-    _NEXT_STEP_PROBE_MS = 5_000
-
     async def _another_step_starts(
         self, step_number: int, modo: str = "hablar"
     ) -> bool:
@@ -1209,21 +1594,160 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         acabar el décimo se esperaban 90 s a un micrófono que ya no vuelve y la
         conversación, terminada y al 100%, se daba por fallida.
 
-        La señal de "queda otro paso" depende del modo: hablando es que vuelva
-        el micrófono; eligiendo, que vuelva a haber respuestas que pulsar.
+        La señal de "queda otro paso" depende del modo: eligiendo, que vuelva
+        a haber respuestas que pulsar; hablando, que vuelva a haber
+        **enunciado** (``PromptText``). El ``SpeechButton`` se queda pintado
+        después del último turno: tomarlo como "hay otro paso" hacía entrar al
+        siguiente y esperar 30 s un PromptText que ya no existe, y la
+        conversación —ya al 100%— se anotaba como fallida.
         """
-        senal = "SpeechButton" if modo == "hablar" else "ChoiceButton"
-        try:
-            await self.page.get_by_test_id(senal).first.wait_for(
-                state="visible", timeout=self._NEXT_STEP_PROBE_MS
-            )
-            return True
-        except PlaywrightTimeoutError:
+        # El enunciado suena al cambiar de paso. Correspondence: tras el paso 10
+        # ``audio_playing`` ya no está y el PromptText del 11 tarda >15 s
+        # (línea del NPC). 15 s se leía como fin y getProgress dejaba 0%.
+        await self._wait_for_silence()
+        await self._dismiss_microphone_check()
+        visto = await self._await_player_or_map(modo)
+        if visto is None:
+            await self._dump_screenshot(f"sin_siguiente_paso_{step_number}")
+            if await self._nudge_submit():
+                self.logger.info(
+                    "  El paso %d no trajo enunciado; se pulsa Próximo paso otra vez",
+                    step_number,
+                )
+                await self._wait_for_silence()
+                visto = await self._await_player_or_map(modo)
+        if visto is None:
             self.logger.info(
                 "  La conversación se acabó en el paso %d (la API decía más)",
                 step_number,
             )
             return False
+        return await self._player_shows_next_step(modo, visto, step_number)
+
+    def _player_or_map_script(self, modo: str) -> str:
+        """Espera el siguiente turno o el mapa de verdad, no el que está detrás.
+
+        ``ActivityMapList`` sigue en el DOM con rects mientras el reproductor
+        tapa la pantalla: getClientRects lo daba por «volvió al mapa». El
+        ``SpeechButton`` residual en el mapa bloqueaba esa lectura y se
+        agotaban 90 s (Correspondence, percentComplete=0 tras el paso 10).
+        ``elementFromPoint`` en el centro del mapa distingue cubierto de
+        visible.
+        """
+        vis = (
+            "const vis = qa => { const e = document.querySelector('[data-qa=' + qa + ']'); "
+            "return Boolean(e && e.getClientRects().length); }; "
+        )
+        mapa = (
+            "const mapFront = () => { "
+            "const m = document.querySelector('[data-qa=ActivityMapList]'); "
+            "if (!m) return false; "
+            "const r = m.getBoundingClientRect(); "
+            "if (r.width < 2 || r.height < 2) return false; "
+            "const hit = document.elementFromPoint("
+            "r.left + r.width / 2, r.top + r.height / 2); "
+            "return Boolean(hit && (hit === m || m.contains(hit) "
+            "|| (hit.closest && hit.closest('[data-qa=ActivityMapList]')))); }; "
+        )
+        if modo != "hablar":
+            return (
+                "() => { "
+                + vis
+                + mapa
+                + "if (vis('ChoiceButton')) return 'choice'; "
+                + "if (vis('PromptText') || vis('SubmitButton') || vis('SpeechButton')) "
+                + "return false; "
+                + "if (mapFront()) return 'map'; "
+                + "return false; }"
+            )
+        return (
+            "() => { "
+            + vis
+            + mapa
+            + "const p = document.querySelector('[data-qa=PromptText]'); "
+            + "if (vis('PromptText') && p && (p.textContent || '').trim()) "
+            + "return 'prompt'; "
+            + "if (vis('SpeechButton') || vis('SubmitButton') || vis('ChoiceButton')) "
+            + "return false; "
+            + "if (mapFront()) return 'map'; "
+            + "return false; }"
+        )
+
+    async def _await_player_or_map(self, modo: str):
+        try:
+            resultado = await self.page.wait_for_function(
+                self._player_or_map_script(modo),
+                timeout=self.timeout_ms,
+            )
+        except PlaywrightTimeoutError:
+            return None
+        valor = await self._read_wait_value(resultado)
+        return valor if valor is not None else "next"
+
+    async def _read_wait_value(self, resultado):
+        if resultado is None:
+            return None
+        if isinstance(resultado, str):
+            return resultado
+        leer = getattr(resultado, "json_value", None)
+        if leer is None:
+            return None
+        valor = leer()
+        if hasattr(valor, "__await__"):
+            valor = await valor
+        return valor
+
+    async def _nudge_submit(self) -> bool:
+        boton = self.page.get_by_test_id("SubmitButton")
+        if not await boton.count():
+            return False
+        etiqueta = await self._submit_button_label()
+        if self._is_skip_label(etiqueta):
+            self.logger.info(
+                "  SubmitButton dice %s; no se pulsa (omitiría el paso)",
+                etiqueta,
+            )
+            return False
+        try:
+            await boton.first.click(force=True, timeout=self.probe_timeout_ms)
+            return True
+        except Exception:
+            return False
+
+    async def _submit_button_label(self) -> str:
+        try:
+            texto = await self.page.evaluate(
+                "() => { const b = document.querySelector('[data-qa=SubmitButton]'); "
+                "return b ? (b.getAttribute('data-qa-button-text') "
+                "|| b.textContent || '').trim() : ''; }"
+            )
+        except Exception:
+            return ""
+        return texto if isinstance(texto, str) else ""
+
+    @staticmethod
+    def _is_skip_label(texto) -> bool:
+        return bool(re.match(r"^\s*(skip|omitir|saltar)\s*$", str(texto or ""), re.I))
+
+    async def _player_shows_next_step(
+        self, modo: str, visto, step_number: int
+    ) -> bool:
+        if visto in ("prompt", "choice"):
+            return True
+        if visto == "map":
+            self.logger.info(
+                "  La conversación se acabó en el paso %d (volvió al mapa)",
+                step_number,
+            )
+            return False
+        marcador = "ChoiceButton" if modo != "hablar" else "PromptText"
+        if await self.page.get_by_test_id(marcador).count():
+            return True
+        self.logger.info(
+            "  La conversación se acabó en el paso %d (volvió al mapa)",
+            step_number,
+        )
+        return False
 
     async def _input_mode(self) -> str:
         """Cómo se contesta esta actividad: ``hablar``, ``elegir`` o nada.
@@ -1254,7 +1778,16 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         contestar, así que un clic que no se registra es el final del paso.
         """
         prompt = self.page.get_by_test_id("PromptText").first
-        previous_prompt = (await prompt.text_content() or "").strip()
+        try:
+            previous_prompt = (await prompt.text_content() or "").strip()
+        except PlaywrightTimeoutError:
+            if step_number > 1:
+                self.logger.info(
+                    "  La conversación se acabó en el paso %d (no hay enunciado)",
+                    step_number - 1,
+                )
+                return True
+            raise
         choices = self.page.get_by_test_id("ChoiceButton")
         if await choices.count() == 0:
             self.logger.error("  El paso %d no tiene respuestas", step_number)
@@ -1262,6 +1795,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
 
         # El enunciado suena al entrar en el paso y el reproductor ignora los
         # clics mientras tanto: es la misma espera que hace la ruta hablada.
+        await self._dismiss_microphone_check()
         await self._wait_for_silence()
 
         if not await self._select_choice(choices.first):
@@ -1384,30 +1918,64 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
     async def _reference_audio_bytes(self, captured: dict) -> bytes:
         """Los bytes del audio, del sitio donde de verdad se pueden conseguir.
 
-        Por orden: lo que decodificó el reproductor (siempre lo mejor), luego
-        una descarga hecha **dentro** de la página, y solo al final el contexto
-        de peticiones. Bajar la URL por fuera devolvía 500: esa media va firmada
-        para la sesión de la página, y una URL ``blob:`` ni siquiera existe
-        fuera de ella.
+        Por orden: lo que el reproductor decodificó **mientras capturábamos**
+        (``ref``, siempre lo mejor); la media que sonó al pulsar la respuesta,
+        descargada por su URL (``url``; sus bytes pueden no pasar por ningún
+        gancho si el reproductor la gestiona fuera del hilo principal); lo
+        último que sonó (``last``); la media que el reproductor tenga cargada
+        en sus elementos; y solo como red de seguridad el audio de reserva
+        (``any``), que es el que ya sonaba antes — la voz de la calibración
+        del micrófono, que **no** es la respuesta elegida. Ese último quedaba
+        por delante de las descargas y por eso todos los pasos inyectaban el
+        mismo clip de "1, 2, 3, 4, 5".
         """
-        codificado = captured.get("audio")
+        codificado = captured.get("ref")
         if codificado:
             return base64.b64decode(codificado)
 
-        # Los bytes pueden llegar con un instante de retraso: el reproductor
-        # arranca la fuente y decodifica justo después.
-        codificado = await self._wait_for_decoded_bytes()
+        url = captured.get("url")
+        if url:
+            descargado = await self._descargar_media(url)
+            if descargado:
+                return descargado
+
+        codificado = captured.get("last")
+        if not codificado and not captured.get("any"):
+            # Los bytes pueden llegar con un instante de retraso: el
+            # reproductor arranca la fuente y decodifica justo después.
+            codificado = await self._wait_for_decoded_bytes()
         if codificado:
             return base64.b64decode(codificado)
 
-        url = captured.get("url") or await self._media_element_src()
-        if not url:
-            return b""
+        # Antes de rendirse al audio de reserva: la media que el reproductor
+        # tenga cargada en sus elementos. Tras pulsar la respuesta, la última
+        # cargada es la de esa respuesta.
+        url = await self._media_element_src()
+        if url:
+            descargado = await self._descargar_media(url)
+            if descargado:
+                self.logger.info("  Respuesta bajada del elemento de media")
+                return descargado
 
+        codificado = captured.get("any")
+        if codificado:
+            self.logger.warning(
+                "  La respuesta pulsada no dio bytes ni URL; se usa el audio "
+                "de reserva (el que ya sonaba antes de pulsarla)"
+            )
+            return base64.b64decode(codificado)
+        return b""
+
+    async def _descargar_media(self, url: str) -> bytes:
+        """Baja una media por su URL: primero dentro de la página, luego fuera.
+
+        La URL puede ir firmada para la sesión de la página, así que la
+        descarga con sus credenciales va primero; el contexto de peticiones
+        queda como segundo intento.
+        """
         desde_la_pagina = await self._download_in_page(url)
         if desde_la_pagina:
             return desde_la_pagina
-
         try:
             respuesta = await self.page.request.get(url)
             if respuesta.ok:
@@ -1415,7 +1983,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             self.logger.warning(
                 "  La descarga del audio respondió %s", respuesta.status
             )
-        except Exception as error:  # noqa: BLE001 - ya no quedan vías
+        except Exception as error:  # noqa: BLE001 - quedan los buffers
             self.logger.warning("  No se pudo descargar el audio: %s", error)
         return b""
 
@@ -1506,6 +2074,14 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             ("el icono del altavoz", lambda: listen.first.get_by_test_id("SpeakerIcon").first.click(force=True, timeout=self._CLICK_PROBE_MS)),
         )
         await self._wait_for_recognizer()
+        # Marca de tiempo del clic: lo que suene a partir de aquí es la
+        # respuesta pulsada (o el prompt del SRE), nunca el enunciado previo.
+        try:
+            await self.page.evaluate(
+                "() => { window.__rosettaClickAt = Date.now(); }"
+            )
+        except Exception:  # noqa: BLE001 - solo afina la elección de URL
+            pass
         # Dos pasadas: la primera puede caer mientras el reproductor todavía se
         # está montando, y entonces ninguna de las tres vías suena.
         for pasada in (1, 2):
@@ -1524,37 +2100,56 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                     return True
         return False
 
-    async def _load_mic_check_audio(self) -> None:
-        """Carga la grabación de la comprobación de micrófono, si la hay.
+    def _packaged_mic_check_files(self) -> tuple[Path, ...]:
+        here = Path(__file__).resolve().parent / "assets"
+        return tuple(
+            here / nombre
+            for nombre in ("mic_check.wav", "mic_check.mp3", "mic_check.m4a", "mic_check.ogg")
+        )
 
-        La prueba pide decir "1, 2, 3, 4, 5" y escucha. Una voz de verdad la
-        pasa; un tono puede que sí, puede que no. El archivo se busca en
-        ``<ROSETTA_HOME>/audio/mic_check.(wav|mp3|m4a|ogg)`` — si no está, se
-        usa el tono y no pasa nada.
-        """
+    def _mic_check_audio_files(self) -> list[Path]:
         from Resolucion_script_rosseta.infraestructura.core import get_base_dir
 
         base_dir = get_base_dir()
-        carpetas = (base_dir / "audio", base_dir / "data" / "audio")
-        for nombre in ("mic_check.wav", "mic_check.mp3", "mic_check.m4a", "mic_check.ogg"):
-            for carpeta in carpetas:
+        nombres = ("mic_check.wav", "mic_check.mp3", "mic_check.m4a", "mic_check.ogg")
+        encontrados: list[Path] = []
+        for carpeta in (base_dir / "audio", base_dir / "data" / "audio"):
+            for nombre in nombres:
                 archivo = carpeta / nombre
-                if not archivo.exists():
-                    continue
-                try:
-                    codificado = base64.b64encode(archivo.read_bytes()).decode("ascii")
-                    listo = await self.page.evaluate(
-                        "audio => window.__rosettaPrepareMicCheckAudio(audio)", codificado
-                    )
-                    self.logger.info(
-                        "  Grabación para la comprobación de micrófono: %s (%s)",
-                        archivo,
-                        "decodificada" if listo else "no se pudo decodificar",
-                    )
-                except Exception as error:  # noqa: BLE001 - el tono sigue disponible
-                    self.logger.info("  No se pudo cargar %s: %s", archivo, error)
-                return
-        self.logger.debug("  Sin grabación propia: la comprobación usará un tono")
+                if archivo.exists():
+                    encontrados.append(archivo)
+        for archivo in self._packaged_mic_check_files():
+            if archivo.exists() and archivo not in encontrados:
+                encontrados.append(archivo)
+        return encontrados
+
+    async def _load_mic_check_audio(self) -> None:
+        """Carga la voz de "1, 2, 3, 4, 5" para la comprobación de micrófono.
+
+        Primero ``<ROSETTA_HOME>/audio/mic_check.*``, luego el WAV empaquetado
+        junto al adapter (entra en la imagen Docker con ``COPY src/``). Un tono
+        llena el medidor y el reconocedor no lo acepta, así que sin grabación
+        se relanza la actividad en vez de seguir.
+        """
+        for archivo in self._mic_check_audio_files():
+            try:
+                codificado = base64.b64encode(archivo.read_bytes()).decode("ascii")
+                listo = await self.page.evaluate(
+                    "audio => window.__rosettaPrepareMicCheckAudio(audio)",
+                    codificado,
+                )
+                self.logger.info(
+                    "  Grabación para la comprobación de micrófono: %s (%s)",
+                    archivo,
+                    "decodificada" if listo else "no se pudo decodificar",
+                )
+                if listo:
+                    return
+            except Exception as error:  # noqa: BLE001 - se prueba el siguiente
+                self.logger.info("  No se pudo cargar %s: %s", archivo, error)
+        raise _MicNeverCalibrated(
+            "no hay grabación de voz para la comprobación de micrófono"
+        ) from None
 
     async def _dismiss_microphone_check(self) -> bool:
         """Cierra el modal de "Comprobación de micrófono".
@@ -1630,9 +2225,9 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 "() => Boolean(window.__rosettaDismissMicCheck "
                 "&& window.__rosettaDismissMicCheck())"
             )
-            if cerrado:
+            if cerrado and await self._wait_for_mic_check_to_pass():
                 self.logger.info("  Comprobación de micrófono aceptada (vigilante)")
-                return hubo_ventana
+                return True
 
             encontrados = []
             for descripcion, candidato in candidatos:
@@ -1641,17 +2236,24 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 if not cuantos:
                     continue
                 await candidato.first.click(force=True, timeout=self.probe_timeout_ms)
-                self.logger.info(
-                    "  Comprobación de micrófono aceptada (%s)", descripcion
-                )
-                return hubo_ventana
+                if await self._wait_for_mic_check_to_pass():
+                    self.logger.info(
+                        "  Comprobación de micrófono aceptada (%s)", descripcion
+                    )
+                    return hubo_ventana
             # A nivel debug esto era invisible y el modal se quedaba abierto sin
             # que nada lo dijera: dos corridas perdidas por no ver esta línea.
             self.logger.info(
                 "  No se encontró el botón del modal de micrófono (%s)",
                 ", ".join(encontrados),
             )
-            return hubo_ventana
+            if hubo_ventana:
+                raise _MicNeverCalibrated(
+                    "la comprobación de micrófono no cerró el modal"
+                ) from None
+            return False
+        except _MicNeverCalibrated:
+            raise
         except Exception as error:  # noqa: BLE001 - puede no estar
             self.logger.debug("  No se pudo cerrar el modal de micrófono: %s", error)
         return False
@@ -2180,10 +2782,13 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             # the same order as ChoiceButton.
             listen = self.page.get_by_test_id("ListenButton").last
 
+        jugadas_antes = await self._reproducciones()
         await self.page.evaluate(
             "() => { window.__rosettaReferenceAudio = null; "
             "window.__rosettaReferenceAudioUrl = null; "
             "window.__rosettaLastPlayedAudio = null; "
+            "window.__rosettaPlayLog = []; "
+            "window.__rosettaClickAt = 0; "
             "window.__rosettaCaptureReference = true; }"
         )
         try:
@@ -2201,20 +2806,69 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                     "  El altavoz de la respuesta no sonó; se usa el último "
                     "audio que reprodujo el reproductor"
                 )
+            # ``_play_reference_audio`` se conforma con que *algo* suene: a
+            # veces es la cola del enunciado, y en una máquina lenta la jugada
+            # del clic llega después. Leer la URL ahí capturaba el audio
+            # equivocado y el reconocedor no acertaba ni una opción. Se espera
+            # a la jugada nueva del clic y a que se calle, y solo entonces se
+            # lee la captura.
+            await self._esperar_jugada_del_clic(jugadas_antes)
             captured = await self.page.evaluate(
-                "() => ({ audio: window.__rosettaReferenceAudio "
-                "|| window.__rosettaLastPlayedAudio "
-                "|| window.__rosettaAnyPlayedAudio, "
-                "url: window.__rosettaReferenceAudioUrl })"
+                """() => {
+                    const log = window.__rosettaPlayLog || [];
+                    const desde = window.__rosettaClickAt || 0;
+                    const esContenido = (u) =>
+                        /resources\\.rosettastone\\.com|LotusAssets/.test(u || '');
+                    const tras = log.filter((e) => e.t >= desde && e.u);
+                    const elegido = tras.find((e) => esContenido(e.u))
+                        || tras[0]
+                        || [...log].reverse().find((e) => esContenido(e.u))
+                        || log[log.length - 1]
+                        || null;
+                    return {
+                        ref: window.__rosettaReferenceAudio,
+                        last: window.__rosettaLastPlayedAudio,
+                        any: window.__rosettaAnyPlayedAudio,
+                        url: elegido
+                            ? elegido.u
+                            : (window.__rosettaReferenceAudioUrl || ''),
+                        tras_clic: tras.length,
+                        jugadas: window.__rosettaPlayCount || 0,
+                    };
+                }"""
             )
         finally:
             await self.page.evaluate(
                 "() => { window.__rosettaCaptureReference = false; }"
             )
 
+        url = captured.get("url") or ""
+        jugadas = int(captured.get("jugadas") or 0)
+        self.logger.info(
+            "  Captura de la respuesta: buffer=%s, url=%s, ultimo=%s, "
+            "jugadas=%d, tras_clic=%d",
+            "si" if captured.get("ref") else "no",
+            (url.split("?")[0] if url else "sin-url"),
+            "si" if captured.get("last") else "no",
+            max(0, jugadas - jugadas_antes),
+            int(captured.get("tras_clic") or 0),
+        )
+        if jugadas <= jugadas_antes:
+            self.logger.warning(
+                "  El clic no lanzó ninguna reproducción nueva; la URL puede "
+                "ser la del enunciado"
+            )
+
         body = await self._reference_audio_bytes(captured)
         if not body:
             raise RuntimeError("no se pudo obtener el audio de referencia")
+
+        if os.getenv("FLUENCY_DUMP_MIC_AUDIO", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            _volcar_audio_inyectado(body, self.logger)
 
         # Pueden sonar **dos** altavoces a la vez (el del enunciado y el de la
         # respuesta que acabamos de pulsar). Un locator con dos coincidencias
@@ -2228,6 +2882,37 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         # vaya el primero de los dos.
         await self._wait_for_all_audio_to_stop()
         return body
+
+    async def _reproducciones(self) -> int:
+        """Cuántas veces ha llamado el reproductor a ``HTMLMediaElement.play``.
+
+        El contador lo lleva el guion de captura; es de mejor esfuerzo: si la
+        página no lo tiene (guion sin instalar), vale 0.
+        """
+        try:
+            return int(await self.page.evaluate("() => window.__rosettaPlayCount || 0"))
+        except Exception:  # noqa: BLE001 - es diagnóstico, no puede hundir nada
+            return 0
+
+    async def _esperar_jugada_del_clic(self, jugadas_antes: int) -> None:
+        """Espera a que el clic reproduzca algo nuevo, y a que se calle.
+
+        ``_play_reference_audio`` da por buena cualquier señal sonora, incluida
+        la cola del enunciado; en la máquina del contenedor el paso del clic a
+        su reproducción llega después de leer la captura (la URL era la del
+        audio anterior y la lección quedaba en 0 %). Se espera a una jugada
+        nueva —contador del gancho— y luego al silencio, que es cuando la
+        última URL registrada es la del clic.
+        """
+        try:
+            await self.page.wait_for_function(
+                "n => (window.__rosettaPlayCount || 0) > n",
+                arg=jugadas_antes,
+                timeout=8_000,
+            )
+        except PlaywrightTimeoutError:
+            self.logger.debug("  El clic no lanzó una reproducción nueva")
+        await self._wait_for_all_audio_to_stop(timeout_ms=8_000)
 
     async def _wait_for_all_audio_to_stop(self, timeout_ms: int | None = None) -> None:
         """Espera a que no quede ningún altavoz sonando. No falla si queda.

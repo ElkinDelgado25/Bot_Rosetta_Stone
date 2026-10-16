@@ -341,7 +341,7 @@ de actividad), quedan **49 actividades distintas** por debajo del 100%:
 | `DialogueExpressionWithReco` | 27 | 0 |
 | `DialogueExpressionWithoutReco` | 17 | 0 |
 | `PronunciationPhoneme` | 1 | 0 |
-| `Vocabulary` / `KeyVocabulary` | 4 | 0,056 · 0,059 · 0,091 — **lectura transitoria**, ver abajo |
+| `Vocabulary` / `KeyVocabulary` | 4 | 0,056 · 0,059 · 0,091 — **1/N si solo se envía la ficha `card`** |
 
 Dos hallazgos que cambiaron el código:
 
@@ -352,11 +352,10 @@ Dos hallazgos que cambiaron el código:
    `DialogueExpressionWithReco`. Esos 17 siguen siendo un hueco abierto: por API
    no se completan y por la ruta de voz tampoco, porque no hay voz que dar.
    Para probar otro tipo sin tocar código: `FLUENCY_TIPOS_EXTRA_NAVEGADOR=Tipo1,Tipo2`.
-2. Las tarjetas de vocabulario **no están rotas**. Los 1/18, 1/17 y 1/11 son
-   fotos tomadas *durante* la escritura: mirando la línea de tiempo de esas 4
-   actividades (`8dc8f563`, `c368ff9e`, `5bc0a3fc`, `9eff7a94`) cada una sube a
-   1,0 en el mismo minuto. Un escaneo que se quede con el mínimo histórico las
-   da por estancadas y no lo están. Con `answers=[]` se completan.
+2. Las tarjetas de vocabulario se quedan en 1/N si se envía un solo
+   `AddProgress` con `answers=[]`. `getSequence` entrega un step `card`; las
+   palabras van en `content[0].carousel` (`type: "word"`). El parser extrae
+   esos ids y el builder emite un mensaje por palabra.
 
 ## La conversación por navegador, paso a paso (01-09-2026)
 
@@ -378,10 +377,12 @@ Lo que hace falta para pasarlo:
    en cuanto aparezcan: el modal **no está** cuando se abre la actividad, sale
    un momento después (en la traza aparece en 1 de 110 instantáneas).
 3. **Señal audible durante la comprobación.** La prueba pide decir "1, 2, 3, 4,
-   5" y escucha: un micrófono virtual sin nada inyectado es silencio y responde
-   *"No se detectó su entrada de audio"*. Se reproduce en bucle
-   `<ROSETTA_RAIZ>/audio/mic_check.wav` si existe (una voz real), y si no un
-   tono de 220 Hz.
+   5" y **reconoce esos dígitos**, no solo mide volumen. Un tono llena el
+   medidor (10/10) y el SRE no cierra el modal. Se reproduce en bucle el WAV
+   empaquetado (`page/assets/mic_check.wav`, voz en inglés americano) o
+   `<ROSETTA_HOME>/audio/mic_check.wav` si se quiere sustituir. Sin grabación
+   no se sigue: se relanza la actividad (`_MicNeverCalibrated`). Si
+   `CalibrationWindow` sigue abierta, **no se entra a los pasos**.
 4. *Comenzar* no es un `<button>`: es un `div`/`span` con `data-qa`. Buscarlo
    por rol devuelve cero y el modal se queda abierto en silencio.
 5. **La señal tiene que llegar de verdad al micrófono** (01-09-2026). El
@@ -494,15 +495,66 @@ Tres, sacados de los errores de una corrida real:
 
 ## Pendiente / parcial
 
-- **KeyVocabulary**: nada que arreglar. Se llegó a implementar el envío de un
-  `"SS:<wordId>:1:false"` por palabra del carrusel y se revirtió: las tarjetas ya
-  se completan con `answers=[]`, así que era cambiar el tráfico con un formato sin
-  verificar a cambio de nada. Si algún día una tarjeta se queda de verdad en 1/N,
-  los `wordId` están en `content[0].carousel` con `type: "word"`.
+- ~~**Vocabulary / KeyVocabulary**~~ **resuelto (29-09-2026)**: un solo step
+  `card` en `getSequence`; las palabras van en `content[0].carousel`
+  (`type: "word"`). El answer que acredita cada palabra **no es el id suelto**:
+  es el compuesto `SS:<word_id>:1:false`, capturado del tráfico real del
+  reproductor (`gaia_capture.jsonl`, `FLUENCY_CAPTURE_GAIA=1`). Mandar el id
+  suelto dejaba la actividad en 1/N; con el formato `SS:...` y un mensaje por
+  palabra (`score: 1`, `correct: true`, mismo `activityStepId`, `attemptId`
+  distinto) la actividad pasa a 100% (verificado en vivo: Correspondence
+  (All Skills) 1/17 → 17/17, `bestGrade=1`). Sin palabras en el carrusel se
+  sigue enviando `answers=[]`.
+
+- **No pulsar Omitir/Skip** al avanzar ni al empujar el paso siguiente. En
+  Correspondence, tras el paso 10 el `SubmitButton` decía Omitir (ya en el
+  carrusel de vocabulario). `_nudge_submit` lo pulsaba, la práctica de
+  conversación quedaba Omitida y `getProgress` en 0.
 
 - **`DialogueExpressionWithoutReco`**: ya no es un hueco, es una ruta. Ver
-  "La conclusión que estaba mal" más abajo. Falta confirmarlo contra la cuenta
-  viva: el código está, la corrida que lo ejercite no.
+  "La conclusión que estaba mal" más abajo. Confirmado en vivo (19-09-2026,
+  Sales Contact): se eligieron 4 pasos y `getProgress` dejó esa `activityId` en
+  `percentComplete=1`.
+
+- **El count gap de 16/17 (y 12/13) no se cierra jugando**: es un id duplicado
+  en la definición v2 del contenido migrado. Ver "El 16/17 es un id duplicado
+  del contenido" más abajo.
+
+## El 16/17 es un id duplicado del contenido (16-10-2026)
+
+Sales Contact quedaba en 16/17 (94%) y Prospective Customer en 12/13 (92%) con
+**todas las actividades listadas al 100%**. No era una ranura pendiente: la
+definición v2 de esas lecciones repite el `activityId` del diálogo de cierre
+(apertura y cierre comparten id), y el mapa pinta las dos ranuras con la misma
+actividad. La v1 tenía ids únicos.
+
+| Lección | sequence | v1 | v2 (activa) |
+|---|---|---|---|
+| Sales Contact | `4267dbce-dbce-4267-cedb-6742cedb6742` | 18 ítems, únicos | 17 ítems, 16 ids (`4af525e4` en posiciones 1 y 17) |
+| Prospective Customer | `34848474` | 14 ítems, únicos | 13 ítems, 12 ids (`cb6c4409` duplicado) |
+
+El servidor acredita **ids únicos**, pero `countOfActivities` cuenta ranuras:
+16 acreditadas / 17 es un techo matemático, no un pendiente. Eso se probó de
+tres formas contra la cuenta viva:
+
+1. Contra la definición real: `DistilledCourses` (`distilledCourse(courseId)`)
+   devuelve el JSON completo de la lección y muestra el duplicado. Volcado en
+   `logs/diagnostics/fluency_DistilledCourses_*.json`.
+2. Reproduciendo el player: postear las 5 respuestas reales del cierre de nuevo
+   (AddProgress `score=1`, aceptadas) deja `getProgress` igual, en 16/17.
+3. Recorriendo el mapa a mano: jugar la ranura "extra" (el id v1 de cierre,
+   10 pasos reales) se acepta con 200, pero el registro del id v1 es
+   **invisible** para la agregación v2 — la lección sigue listando 16.
+   El propio mapa marca ambas ranuras "Correcta" mientras el contador dice
+   16/17.
+
+Decisión: `_content_duplicate_gap` reconoce la forma exacta (el contador excede
+en 1 a lo listado y **todo** lo listado está acreditado) y la lección se cuenta
+como completa. `_close_map_count_gap` ya no replaya el mapa en ese caso, y
+`_diagnose_activities` no cuenta la ranura extra como fallo. Un hueco con
+actividades sin acreditar conserva el replay completo, que sigue siendo lo
+único que acredita una omisión real. Corrida final contra la cuenta viva
+(16-10-2026): `0 pending lessons found`, código 0.
 
 ## La conclusión que estaba mal (02-09-2026)
 
@@ -538,11 +590,42 @@ Dos cosas caen de ahí:
 El arreglo es un detector de modo en la página (`_input_mode`): tras abrir la
 actividad se espera a que aparezca **el micrófono o las respuestas**, lo primero
 que llegue. Con micrófono, el flujo de siempre. Sin él, `_complete_visible_choice_step`
-marca una respuesta y pulsa *Próximo paso*, sin tocar el micrófono virtual ni la
-comprobación de micrófono. `_another_step_starts` también depende del modo:
-eligiendo, la señal de que queda otro turno es que vuelva a haber respuestas, no
-que vuelva el micrófono — preguntando por el micrófono, toda conversación
-`WithoutReco` se daba por acabada en su primer paso.
+marca una respuesta y pulsa *Próximo paso*. El modal de calibración **también
+sale en WithoutReco**, pero no al abrir: aparece encima de "¡Eso es correcto!"
+(medidor 1/10 si no hay voz). Por eso la ruta de elegir carga el WAV de
+`mic_check.wav` igual, sin esperar el motor de habla. `_another_step_starts`
+también depende del modo:
+eligiendo, la señal de que queda otro turno es que vuelva a haber respuestas;
+hablando, que vuelva a haber **enunciado** (`PromptText`). En los dos casos se
+espera primero a que el altavoz se calle. Hablando, si el marcador
+`audio_playing` ya no está, el PromptText del paso siguiente puede tardar más
+de 15 s (Correspondence se cortaba en 10/15 con `percentComplete=0`): se espera
+hasta el techo de la actividad a que vuelva el enunciado **visible**. El mapa
+`ActivityMapList` sigue visible a un lado del reproductor: ni `getClientRects`
+ni `elementFromPoint` bastan si el mapa no está tapado del todo. Si sigue
+habiendo `SpeechButton` / `SubmitButton` / `ChoiceButton`, se espera el
+enunciado. Si esa espera se agota y `SubmitButton` sigue, se pulsa *Próximo
+paso* otra vez. Un `SpeechButton` residual sin enunciado al final de una
+conversación ya hecha no cuenta como otro paso. El `SpeechButton` se
+queda pintado después del último turno: tomarlo como "hay otro paso" hacía
+entrar al siguiente y esperar 30 s un PromptText que ya no existe, y la
+conversación —ya al 100%— se anotaba como fallida. Preguntando por el
+micrófono en `WithoutReco`, toda conversación se daba por acabada en su primer
+paso. Si tras marcar una respuesta el modal de micrófono tapa *Próximo paso*
+(`CalibrationWindow`, z-index 7000), `_advance_to_next_step` arma la voz y lo
+cierra *en cada intento* de pulsar; si sigue encima, se reintenta la actividad
+(`_MicNeverCalibrated`) en vez de anotar "no avanzó". Eligiendo, "¿queda otro
+paso?" espera a `ChoiceButton` o al mapa hasta el techo de la actividad (no 5 s:
+eso cerraba la copia extra en el paso 1). El catálogo
+`LessonDisplayer` a veces no pinta tras un clic a `LaunchCourseButton`: se
+pulsa el curso otra vez; si el botón ya no está (se salió de la parrilla), se
+espera el catálogo en vez de clicar 30 s contra un locator muerto. La copia de
+cierre del mapa, si no es visible, se force-clica con la sonda corta (el skip
+dejaba 16/17). El estado local no basta para saltar una actividad fabricada:
+Prospective Customer tenía Vocabulary al 6% en `getProgress` y marcada hecha
+en disco, y se saltaba; `credited=11/12` dejaba la lección al 85% aunque el
+diálogo ya estaba al 100%. Si el servidor no la tiene a `percentComplete>=1`,
+se vuelve a enviar.
 
 Una diferencia que sí importa: hablando, marcar la respuesta es opcional (el
 reconocedor decide cuál has dicho); eligiendo es obligatorio, porque no hay otra
@@ -629,3 +712,5 @@ obligatorio para las conversaciones. Los knobs `FLUENCY_CAPTURAR_GAIA` y
 - Detección de producto y enrutado tras login (`RosettaProduct`).
 - Lectura (catálogo + secuencia) verificada contra la API real.
 - Escritura (`AddProgress`) implementada con knobs de seguridad.
+- **Vocabulary / KeyVocabulary** acreditado por API con el answer `SS:<word_id>:1:false`
+  (un mensaje por palabra del carrusel), verificado en vivo 29-09-2026 (0 → 100%).

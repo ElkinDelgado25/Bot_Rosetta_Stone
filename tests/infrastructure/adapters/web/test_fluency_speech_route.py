@@ -18,12 +18,18 @@ from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.flue
 
 
 class _Locator:
-    def __init__(self, coincidencias=1):
+    def __init__(self, coincidencias=1, clicks=None, index=0):
         self.coincidencias = coincidencias
+        self.clicks = clicks if clicks is not None else []
+        self.index = index
 
     @property
     def first(self):
-        return self
+        return _Locator(self.coincidencias, self.clicks, 0)
+
+    @property
+    def last(self):
+        return _Locator(self.coincidencias, self.clicks, max(0, self.coincidencias - 1))
 
     async def count(self):
         return self.coincidencias
@@ -31,8 +37,14 @@ class _Locator:
     async def wait_for(self, state=None, timeout=None):
         return None
 
+    async def is_visible(self):
+        return True
+
+    def nth(self, i):
+        return type(self)(self.coincidencias, self.clicks, i)
+
     async def click(self, **kwargs):
-        return None
+        self.clicks.append(self.index)
 
 
 class _Context:
@@ -52,7 +64,10 @@ class _Page:
         return _Locator(1 if self.ya_completa else 0)
 
     def get_by_test_id(self, test_id):
-        return _Locator()
+        # Hueco aún clickable. Si el mapa ya marcó todas las copias, no queda.
+        if test_id == "CalibrationWindow":
+            return _Locator(0)
+        return _Locator(0 if self.ya_completa else 1)
 
     async def add_init_script(self, script):
         return None
@@ -73,6 +88,7 @@ class _Espia(PlaywrightFluencySpeechPage):
         self.elegidos = []
         self.modos_preguntados = []
         self.preparo_microfono = False
+        self.espero_motor = False
 
     async def _open_lesson(self, course_title, lesson_title):
         return None
@@ -85,6 +101,10 @@ class _Espia(PlaywrightFluencySpeechPage):
 
     async def _dismiss_microphone_check(self):
         self.preparo_microfono = True
+
+    async def _wait_for_speech_engine(self):
+        self.espero_motor = True
+        return True
 
     async def _complete_visible_step(self, step_number):
         self.hablados.append(step_number)
@@ -118,11 +138,16 @@ class TestRutaDeLaConversacion:
         assert espia.elegidos == [1, 2, 3]
         assert espia.hablados == []
 
-    def test_sin_microfono_no_se_monta_el_microfono(self):
-        """Montarlo era lo que gastaba los 90 s antes de rendirse."""
+    def test_sin_microfono_prepara_la_voz_de_calibracion(self):
+        """Prospective Customer: el modal sale al marcar, no al abrir.
+
+        Esperar el motor/SpeechButton eran los 90 s. Cargar el WAV no.
+        Sin él el medidor se queda a 1/10 y Próximo paso no avanza.
+        """
         espia = _Espia(_Page(), modo="elegir")
         _correr(espia)
-        assert espia.preparo_microfono is False
+        assert espia.preparo_microfono is True
+        assert espia.espero_motor is False
 
     def test_el_modo_viaja_a_la_pregunta_de_si_queda_otro_turno(self):
         """Preguntando por el micrófono, toda WithoutReco moría en su paso 1."""
@@ -159,4 +184,84 @@ class TestRutaDeLaConversacion:
         espia = _Espia(_Page(ya_completa=True), modo="elegir")
         assert _correr(espia) is True
         assert espia.elegidos == []
+
+    def test_una_copia_completa_no_salta_la_otra_del_mapa(self):
+        """Sales Contact: el diálogo abre y cierra la lección, mismo id.
+
+        Una copia ya tiene ``_completed``; la otra sigue clickable. Saltar
+        las dos dejaba countOfActivities en 17 con 16 acreditadas.
+        """
+
+        class _MapaConCopiaHueca(_Page):
+            def locator(self, selector):
+                return _Locator(1)
+
+            def get_by_test_id(self, test_id):
+                return _Locator(1)
+
+        espia = _Espia(_MapaConCopiaHueca(), modo="elegir")
+        assert _correr(espia) is True
+        assert espia.elegidos == [1, 2, 3]
+
+    def test_the_remaining_map_copy_is_the_closing_slot(self):
+        """La ranura extra está a la derecha. ``.first`` reabre la de apertura.
+
+        Prospective Customer / Sales Contact: tras acreditar el id, el mapa
+        sigue pintando ``activity_{id}`` dos veces. Clicar la de la izquierda
+        (ya hecha) deja count 17 con 16 acreditadas.
+        """
+
+        class _MapaDosCopias(_Page):
+            def __init__(self):
+                super().__init__()
+                self.clicks = []
+
+            def locator(self, selector):
+                return _Locator(1)
+
+            def get_by_test_id(self, test_id):
+                if test_id.startswith("activity_"):
+                    return _Locator(2, clicks=self.clicks)
+                return _Locator(1)
+
+        page = _MapaDosCopias()
+        espia = _Espia(page, modo="elegir")
+        assert _correr(espia) is True
+        assert page.clicks == [1]
+
+    def test_a_locked_closing_slot_is_force_clicked(self):
+        """Prospective Customer: la copia de cierre no visible era un skip.
+
+        ``wait_for`` 90 s no. Force-click corto: si el hueco existe en el DOM
+        (count gap 16/17) hay que jugarlo, no dar la lección por cerrada.
+        """
+        class _HuecoInvisible(_Locator):
+            async def is_visible(self):
+                return False
+
+            async def wait_for(self, state=None, timeout=None):
+                from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+                raise PlaywrightTimeoutError(f"timeout {timeout}")
+
+        class _MapaCierreBloqueado(_Page):
+            def __init__(self):
+                super().__init__()
+                self.clicks = []
+
+            def locator(self, selector):
+                return _Locator(1)
+
+            def get_by_test_id(self, test_id):
+                if test_id.startswith("activity_"):
+                    return _HuecoInvisible(1, clicks=self.clicks)
+                if test_id == "CalibrationWindow":
+                    return _Locator(0)
+                return _Locator(1)
+
+        page = _MapaCierreBloqueado()
+        espia = _Espia(page, modo="elegir")
+        assert _correr(espia) is True
+        assert page.clicks == [0]
+        assert espia.elegidos == [1, 2, 3]
 

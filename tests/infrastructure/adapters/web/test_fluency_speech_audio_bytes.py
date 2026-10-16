@@ -1,9 +1,13 @@
 """De dónde salen los bytes del audio de referencia.
 
-Bajar la URL por fuera de la página devolvía 500: esa media va firmada para la
-sesión de la página, y una URL ``blob:`` ni siquiera existe fuera de ella. El
-orden importa: lo decodificado por el reproductor, luego una descarga dentro de
-la página, y el contexto de peticiones solo como último recurso.
+El orden importa y es el que se aprendió a golpes: lo que el reproductor
+decodificó mientras se capturaba (``ref``), la URL de la media que sonó al
+pulsar la respuesta (que puede no pasar por ningún gancho si el reproductor la
+gestiona fuera del hilo principal), los bytes que llegan justo después
+(``last``), la media que el DOM tenga cargada, y **solo al final** el audio de
+reserva (``any``, el que ya sonaba antes: la voz del mic-check). El reserva
+quedaba delante de la URL y por eso todos los pasos inyectaban el mismo clip
+"1, 2, 3, 4, 5": las conversaciones no reconocían nada.
 """
 
 import asyncio
@@ -17,6 +21,7 @@ from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.flue
 
 BYTES = b"audio-de-verdad"
 EN_BASE64 = base64.b64encode(BYTES).decode()
+RESERVA = base64.b64encode(b"audio-de-reserva").decode()
 
 
 class _Respuesta:
@@ -81,9 +86,23 @@ def _bytes(page, captured):
 class TestReferenceAudioBytes:
     def test_prefers_what_the_player_decoded(self):
         page = _Page()
-        assert _bytes(page, {"audio": EN_BASE64, "url": "https://x/a.mp3"}) == BYTES
+        assert _bytes(page, {"ref": EN_BASE64, "url": "https://x/a.mp3"}) == BYTES
         # Ni se molesta en descargar nada.
         assert page.evaluaciones == [] and page.request.llamadas == []
+
+    def test_the_stale_fallback_does_not_shadow_the_url(self):
+        """Regresión: el audio de reserva (mic-check) tapaba la URL real.
+
+        Con el reserva por delante, TODOS los pasos inyectaban el mismo clip
+        y el reconocedor no aceptaba ninguna respuesta.
+        """
+        page = _Page(en_pagina=EN_BASE64)
+        captured = {"any": RESERVA, "url": "https://x/respuesta.mp3"}
+        assert _bytes(page, captured) == BYTES
+
+    def test_the_stale_fallback_is_the_last_resort(self):
+        page = _Page()
+        assert _bytes(page, {"any": RESERVA}) == b"audio-de-reserva"
 
     def test_downloads_inside_the_page_when_there_are_no_bytes(self):
         page = _Page(en_pagina=EN_BASE64)
@@ -109,7 +128,7 @@ class TestReferenceAudioBytes:
     def test_bytes_that_arrive_a_moment_later_are_used(self):
         """El reproductor arranca la fuente y decodifica justo después."""
         page = _Page(bytes_tardios=EN_BASE64)
-        assert _bytes(page, {"url": "https://x/a.mp3"}) == BYTES
+        assert _bytes(page, {}) == BYTES
         assert page.descargas == 0
 
     def test_the_dom_supplies_the_source_when_the_hooks_missed_it(self):

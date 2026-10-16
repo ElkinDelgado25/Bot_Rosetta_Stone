@@ -1,6 +1,6 @@
 # CLAUDE.md — Guía de Desarrollo
 
-Instrucciones y contexto para trabajar en este repositorio. Léeme primero.
+Instrucciones y contexto para trabajar en este repositorio. Léeme primero, trabaja en este proyecto sin importar que.
 
 ---
 
@@ -29,7 +29,7 @@ Instrucciones y contexto para trabajar en este repositorio. Léeme primero.
 - **FastAPI** — servidor web (opcional, solo si usas interfaz web)
 - **Playwright** — automatización del navegador (Chromium/Chrome/Edge)
 - **Docker** — aislamiento de corridas (opcional, recomendado para la web)
-- **pytest** — tests (392 tests)
+- **pytest** — tests (452 tests)
 
 ---
 
@@ -63,7 +63,7 @@ uv run python -m Resolucion_script_rosseta
 
 Lee del `.env`. Primera ejecución lo crea interactivamente.
 
-### Tests — 392 tests, sin navegador ni contenedores
+### Tests — 452 tests, sin navegador ni contenedores
 
 ```bash
 uv run pytest -q
@@ -118,7 +118,7 @@ docs/
 ├── ARCHITECTURE.md       Modularización y capas
 └── FLUENCY_BUILDER.md    Detalles del producto Fluency
 
-tests/                    392 tests, por capas
+tests/                    452 tests, por capas
 ```
 
 ---
@@ -251,6 +251,12 @@ de reconocimiento y lo anuncia con un porcentaje: *"Configurar micrófono ·
 Cargando motor de habla…28%"*. Mientras ese modal esté, el botón **no puede**
 habilitarse. Todo lo que parecía un fallo de calibración del SRE —`calibrateSaga`
 cancelándose cada 4,1 s— es eso: no hay motor con el que calibrar.
+
+Si el motor ya cargó y el modal dice *"Diga lo siguiente: 1 2 3 4 5"* con el
+medidor a 10/10, eso ya no es el motor: es la comprobación de dígitos. Un tono
+llena las barras y no cierra la ventana. Va un WAV de voz empaquetado; si el
+modal no se va, se reabre la actividad (`_MicNeverCalibrated`) en vez de clicar
+debajo.
 
 Lo que lo volvía imposible era el presupuesto. La espera del micrófono son
 `timeout_ms // (mic_retries + 1)` = 30 s, y al agotarse se reabría la lección:
@@ -392,9 +398,9 @@ Un JSON tocado a mano en Windows lleva BOM. `json.load` revienta. Se lee con `en
 | Código 3 al ejecutar | Sesión incompleta (login fallido) | Verifica en la UI: ¿dónde se corta? |
 | "0 completadas" tras ejecutar | Sesión no se capturó | Mira el log en vivo: ¿envió algo? |
 | Corrida detiene en una lección | `fluency_max_lessons` puesto | Saca el límite del perfil |
-| Lección en ~95% | Le quedan conversaciones (`DialogueExpression*`) | Son las únicas `ordering: tree`: no se acreditan por API, van por navegador. Ver `docs/FLUENCY_BUILDER.md` |
+| Lección en ~95% | Le quedan conversaciones (`DialogueExpression*`) | Son las únicas `ordering: tree`: no se acreditan por API, van por navegador. Si `getProgress` lista menos que `countOfActivities`, la corrida las vuelve a tomar. Ver `docs/FLUENCY_BUILDER.md` |
 | "el paso N no llegó a seleccionar ninguna respuesta" | El modal de micrófono está encima (`z-index: 7000`) | No es un problema de clics: mira el medidor en el log. Ver `docs/FLUENCY_BUILDER.md` |
-| "el micrófono no se habilitó a tiempo" | El motor de habla no acabó de cargar | No es la calibración ni el audio. Busca "Motor de habla al N%" en el log: si sube, deja que termine; si se queda parado, sube `FLUENCY_SPEECH_ENGINE_STALL_MS` |
+| "el micrófono no se habilitó a tiempo" / medidor 10/10 y `modo=tone` o `missing` | La comprobación no reconoció "1 2 3 4 5" | Un tono llena barras y no cierra el modal. Tiene que haber `mic_check.wav` (va empaquetado). Si el motor está en % y sube, espera; si se queda parado, sube `FLUENCY_SPEECH_ENGINE_STALL_MS` |
 | Chips vuelven a `idle` tras reiniciar | Último estado vive en memoria | Sí, el progreso persiste en disco |
 | `Could not launch a browser` | No hay Chrome/Edge en el PATH | `uv run playwright install chromium` |
 | La UI no responde (Docker reinició) | Imagen vieja | Reconstruye: `docker compose up -d --build --force-recreate` |
@@ -407,7 +413,7 @@ Un JSON tocado a mano en Windows lleva BOM. `json.load` revienta. Se lee con `en
 uv run pytest -q
 ```
 
-392 tests. Ninguno abre navegador ni lanza contenedores:
+452 tests. Ninguno abre navegador ni lanza contenedores:
 - `FakeBackend` inyectado en tests de web
 - Tests de adapters mockean APIs
 - Todo se ejecuta en ~5 segundos

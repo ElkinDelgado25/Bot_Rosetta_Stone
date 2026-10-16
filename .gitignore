@@ -34,3 +34,6 @@ SIGUIENTE_CORRIDA.md
 
 # Local AI assistant settings
 .claude/settings.local.json
+
+# Agent tooling cache (skill registry)
+.atl/

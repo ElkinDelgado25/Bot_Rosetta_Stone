@@ -15,11 +15,14 @@ ventana (``CalibrationWindow``) y lo que se espera es que se vaya.
 
 import asyncio
 
+import pytest
+
 from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page import (
     fluency_speech_page as modulo,
 )
 from Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page.fluency_speech_page import (
     PlaywrightFluencySpeechPage,
+    _MicNeverCalibrated,
 )
 
 
@@ -97,6 +100,7 @@ class _Page:
         vigilante=False,
         calibracion=ESCUCHANDO,
         se_cierra=False,
+        se_cierra_tras_clic=True,
     ):
         self.boton = boton if boton is not None else _Boton()
         self.vacio = _Boton(cuantos=0)
@@ -105,6 +109,7 @@ class _Page:
         self.vigilante = vigilante
         self.calibracion = calibracion
         self.se_cierra = se_cierra
+        self.se_cierra_tras_clic = se_cierra_tras_clic
         self.rol_pedido = None
         self.despedidas = 0
         self.esperas = 0
@@ -119,8 +124,11 @@ class _Page:
 
     async def wait_for_function(self, expression, *args, **kwargs):
         self.esperas += 1
-        if not self.se_cierra:
-            raise modulo.PlaywrightTimeoutError("la ventana sigue ahí")
+        if self.se_cierra:
+            return
+        if self.se_cierra_tras_clic and self.boton.pulsado:
+            return
+        raise modulo.PlaywrightTimeoutError("la ventana sigue ahí")
 
     async def screenshot(self, path=None):
         return None
@@ -175,8 +183,9 @@ class TestMicrophoneCheck:
         assert page.esperas == 1
 
     def test_if_the_window_stays_it_falls_back_to_pressing(self):
-        page = _Page(se_cierra=False)
-        _dismiss(page)
+        page = _Page(se_cierra=False, se_cierra_tras_clic=False)
+        with pytest.raises(_MicNeverCalibrated):
+            _dismiss(page)
         assert page.boton.pulsado is True
 
     def test_picks_a_device_and_starts(self):
@@ -327,7 +336,9 @@ class TestMicrophoneSignal:
     def test_there_is_a_continuous_signal_for_the_check(self):
         guion = modulo._VIRTUAL_MIC_SCRIPT
         assert "__rosettaStartMicNoise" in guion
-        assert "createOscillator" in guion
+        assert "__rosettaMicCheckBuffer" in guion
+        assert "fuente.loop = true" in guion
+        assert 'window.__rosettaMicCheckMode = "tone"' not in guion
 
     def test_the_signal_goes_to_a_bus_that_outlives_the_destination(self):
         """El destino se crea VIVO en cada ``getUserMedia``, la señal no.

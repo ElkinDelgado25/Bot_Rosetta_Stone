@@ -52,6 +52,7 @@ where = ["src"]
 # El HTML de la UI no es código: sin esto no viaja en una instalación del paquete.
 [tool.setuptools.package-data]
 "Resolucion_script_rosseta.presentacion.web" = ["static/*"]
+"Resolucion_script_rosseta.infraestructura.adapters.web.playwright.page" = ["assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

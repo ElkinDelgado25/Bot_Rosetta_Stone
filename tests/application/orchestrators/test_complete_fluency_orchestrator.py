@@ -336,6 +336,53 @@ class TestCompleteFluencyOrchestrator:
         _run(orch)
         assert api.add_progress_calls == []
 
+    def test_state_does_not_skip_activity_the_server_still_has_incomplete(
+        self, tmp_path
+    ):
+        """Prospective Customer: Vocabulary en estado local y getProgress a 6%.
+
+        Se saltaba y la lección se quedaba al 85% (listed=12 credited=11)
+        aunque el diálogo ya estaba al 100%.
+        """
+        api = _FakeApi(["seq-a"])
+
+        async def _partial(authorization, course_id):
+            return [
+                {
+                    "courseId": course_id,
+                    "percentComplete": 0.846,
+                    "sequences": [
+                        {
+                            "sequenceId": "seq-a",
+                            "percentComplete": 0.846,
+                            "countOfActivities": 13,
+                            "activities": [
+                                {
+                                    "activityId": "a1",
+                                    "percentComplete": 0.0625,
+                                    "bestGrade": 0,
+                                    "attempts": [],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+
+        api.get_progress = _partial
+        from Resolucion_script_rosseta.infraestructura.state import RunProgressState
+
+        state = RunProgressState(tmp_path / "fluency_u1.json")
+        state.mark_done(fluency_activity_key("c1", "seq-a", "a1"))
+        state.save()
+
+        orch = CompleteFluencyOrchestrator(
+            api_port=api, state_dir=tmp_path, max_lessons=None
+        )
+        _run(orch)
+        assert len(api.add_progress_calls) == 1
+        assert api.add_progress_calls[0][0]["activityId"] == "a1"
+
     def test_retries_on_rate_limit_then_succeeds(self, tmp_path):
         api = _RateLimitedApi(["seq-a"], fail_times=2)
         orch = CompleteFluencyOrchestrator(
@@ -416,6 +463,10 @@ class TestCompleteFluencyOrchestrator:
                 "lesson_title": "Lesson seq-a",
                 "activity_id": "voice-a",
                 "expected_steps": 2,
+                "steps": [
+                    {"id": "speech-1", "success_ids": [], "options": []},
+                    {"id": "speech-2", "success_ids": [], "options": []},
+                ],
             }
         ]
         from Resolucion_script_rosseta.infraestructura.state import RunProgressState
@@ -439,4 +490,181 @@ class TestCompleteFluencyOrchestrator:
 
         state = RunProgressState(tmp_path / "fluency_u1.json")
         assert not state.is_done(fluency_activity_key("c1", "seq-a", "voice-a"))
+
+    def test_a_duplicate_copy_gap_is_not_replayed_and_counts_as_complete(
+        self, tmp_path
+    ):
+        """El hueco +1 con todo acreditado es la copia con id duplicado (v2).
+
+        Tras la primera copia getProgress deja el id a 100% y countOfActivities
+        en 17 con 16 listadas. El replay del mapa, probado en vivo, no cambia
+        nada: el servidor no acredita la ranura extra. No se juega de nuevo y
+        la lección se cuenta como completa.
+        """
+        api = _SpeechApi(complete_after=True)
+        orig = api.get_progress
+        speech = _SpeechSpy()
+
+        async def _gapped(authorization, course_id):
+            progress = await orig(authorization, course_id)
+            if not speech.calls:
+                return progress
+            seq = progress[0]["sequences"][0]
+            seq["countOfActivities"] = 17
+            seq["percentComplete"] = 16 / 17
+            seq["activities"] = [
+                *seq["activities"],
+                *[
+                    {"activityId": f"done-{i}", "percentComplete": 1.0}
+                    for i in range(15)
+                ],
+            ]
+            return progress
+
+        api.get_progress = _gapped
+        orch = CompleteFluencyOrchestrator(
+            api_port=api,
+            speech_port=speech,
+            state_dir=tmp_path,
+            max_lessons=None,
+        )
+
+        _run(orch)
+
+        assert len(speech.calls) == 1
+        assert speech.calls[0]["activity_id"] == "voice-a"
+        from Resolucion_script_rosseta.infraestructura.state import RunProgressState
+
+        state = RunProgressState(tmp_path / "fluency_u1.json")
+        assert state.is_done(fluency_activity_key("c1", "seq-a", "voice-a"))
+
+    def test_a_lesson_whose_only_gap_is_the_duplicate_copy_is_skipped(
+        self, tmp_path
+    ):
+        """Todo acreditado y el hueco es la copia duplicada (v2): no se toca.
+
+        Es la forma estable de la lección tras completarla: getProgress lista
+        el id único al 100% y countOfActivities sigue en 17. El replay no
+        acredita nada, así que la corrida ya no la abre ni una vez.
+        """
+        api = _SpeechApi(complete_after=True)
+        orig = api.get_progress
+
+        async def _gapped(authorization, course_id):
+            progress = await orig(authorization, course_id)
+            seq = progress[0]["sequences"][0]
+            seq["countOfActivities"] = 17
+            seq["percentComplete"] = 16 / 17
+            seq["activities"] = [
+                *seq["activities"],
+                *[{"activityId": f"done-{i}", "percentComplete": 1.0} for i in range(15)],
+            ]
+            return progress
+
+        api.get_progress = _gapped
+        speech = _SpeechSpy()
+        orch = CompleteFluencyOrchestrator(
+            api_port=api,
+            speech_port=speech,
+            state_dir=tmp_path,
+            max_lessons=None,
+        )
+
+        _run(orch)
+
+        assert speech.calls == []
+
+    def test_a_duplicate_copy_gap_counts_as_complete_not_pending(self):
+        """getProgress listed 12 of 13 at 100%: el ítem extra es la copia con
+
+        id duplicado del contenido v2 y no puede acreditarse nunca, así que la
+        lección cuenta como completa en vez de quedar pendiente para siempre.
+        """
+        orch = CompleteFluencyOrchestrator(api_port=object(), max_lessons=None)
+        catalog = FluencyCatalog(
+            courses=[
+                FluencyCourse(
+                    "c1", "p", "Course", "B1", "Topic",
+                    [FluencySequenceRef("seq-a", "Sales Contact", percent_complete=1.0)],
+                )
+            ]
+        )
+        progress = {
+            "c1": [{
+                "courseId": "c1",
+                "sequences": [{
+                    "sequenceId": "seq-a",
+                    "percentComplete": 1.0,
+                    "countOfActivities": 13,
+                    "activities": [
+                        {"activityId": f"done-{i}", "percentComplete": 1.0}
+                        for i in range(12)
+                    ],
+                }],
+            }]
+        }
+        assert orch._pending_lessons(catalog, progress) == []
+
+    def test_a_count_gap_with_uncredited_items_stays_pending(self):
+        """Un hueco +1 con listadas sin acreditar NO es la copia duplicada.
+
+        Solo el hueco con todo lo listado al 100% delata al id duplicado; si
+        queda algo sin acreditar, la lección sigue pendiente como siempre.
+        """
+        orch = CompleteFluencyOrchestrator(api_port=object(), max_lessons=None)
+        catalog = FluencyCatalog(
+            courses=[
+                FluencyCourse(
+                    "c1", "p", "Course", "B1", "Topic",
+                    [FluencySequenceRef("seq-a", "Sales Contact", percent_complete=1.0)],
+                )
+            ]
+        )
+        progress = {
+            "c1": [{
+                "courseId": "c1",
+                "sequences": [{
+                    "sequenceId": "seq-a",
+                    "percentComplete": 11 / 13,
+                    "countOfActivities": 13,
+                    "activities": [
+                        {"activityId": "a", "percentComplete": 1.0},
+                        {"activityId": "b", "percentComplete": 0.5},
+                        *[
+                            {"activityId": f"done-{i}", "percentComplete": 1.0}
+                            for i in range(10)
+                        ],
+                    ],
+                }],
+            }]
+        }
+        pending = orch._pending_lessons(catalog, progress)
+        assert [seq.sequence_id for _, seq in pending] == ["seq-a"]
+
+    def test_a_truly_complete_lesson_stays_out_of_the_queue(self):
+        orch = CompleteFluencyOrchestrator(api_port=object(), max_lessons=None)
+        catalog = FluencyCatalog(
+            courses=[
+                FluencyCourse(
+                    "c1", "p", "Course", "B1", "Topic",
+                    [FluencySequenceRef("seq-a", "Security Rules", percent_complete=1.0)],
+                )
+            ]
+        )
+        progress = {
+            "c1": [{
+                "courseId": "c1",
+                "sequences": [{
+                    "sequenceId": "seq-a",
+                    "percentComplete": 1.0,
+                    "countOfActivities": 3,
+                    "activities": [
+                        {"activityId": "a", "percentComplete": 1.0},
+                        {"activityId": "b", "percentComplete": 1.0},
+                        {"activityId": "c", "percentComplete": 1.0},
+                    ],
+                }],
+            }]
+        }
+        assert orch._pending_lessons(catalog, progress) == []
 
