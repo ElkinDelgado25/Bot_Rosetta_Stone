@@ -31,11 +31,6 @@ RUN /opt/venv/bin/python -m playwright install --with-deps chromium \
 
 COPY src/ ./src/
 
-# curl solo para el HEALTHCHECK.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
-
 # El paquete raíz no tiene __init__.py (namespace packages), así que se ejecuta
 # desde el árbol de fuentes vía PYTHONPATH, igual que en local.
 ENV PATH="/opt/venv/bin:$PATH" \
@@ -56,7 +51,9 @@ WORKDIR /data
 EXPOSE 8000
 VOLUME ["/data"]
 
+# El HEALTHCHECK no usa curl: python ya está en la imagen, y así un cambio de
+# solo código (COPY src) no arrastra una capa apt-get que dependa de la red.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8000/api/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"
 
 CMD ["python", "-m", "Resolucion_script_rosseta.presentacion.web.server"]
