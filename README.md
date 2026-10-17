@@ -46,6 +46,10 @@ uv sync --extra web
 `--extra web` añade FastAPI y el cliente de Docker. Si solo vas a usar la CLI,
 `uv sync` a secas es suficiente.
 
+El monitoreo opcional de errores usa Sentry. Configura `SENTRY_DSN` en `.env`
+para la ejecución local o en el `.env` de Docker Compose; sin esa variable no
+se envían eventos. `SENTRY_ENVIRONMENT` permite etiquetar el entorno.
+
 Si no tienes Chrome ni Edge (típico en Linux), instala el navegador de
 Playwright una vez:
 

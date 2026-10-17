@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import sentry_sdk
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -29,6 +30,23 @@ from .profiles import ProfileStore
 from .run_manager import RunAlreadyActive, RunManager
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _initialize_sentry() -> None:
+    """Enable error reporting only when a DSN is configured."""
+    dsn = os.getenv("SENTRY_DSN", "").strip()
+    if not dsn or sentry_sdk.is_initialized():
+        return
+
+    sentry_sdk.init(
+        dsn=dsn,
+        environment=os.getenv("SENTRY_ENVIRONMENT") or None,
+        send_default_pii=False,
+        # Profile creation includes passwords and auth tokens may be supplied
+        # in query strings; never attach request bodies to error events.
+        max_request_body_size="never",
+        traces_sample_rate=0.0,
+    )
 
 
 def _require_token(request: Request) -> None:
@@ -48,6 +66,7 @@ def create_app(
 ) -> FastAPI:
     """Build the app. Injectable arguments exist so tests can use temp dirs."""
     load_env_into_environ()
+    _initialize_sentry()
     profile_store = store or ProfileStore()
     if state_dir is None:
         settings = get_settings().rosseta_settings

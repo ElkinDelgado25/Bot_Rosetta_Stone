@@ -185,6 +185,8 @@ Van en `.env` o en `environment:` del compose.
 | `ROSETTA_WEB_HOST` | `127.0.0.1` | Interfaz de escucha (web) |
 | `ROSETTA_WEB_PORT` | `8000` | Puerto (web) |
 | `ROSETTA_WEB_TOKEN` | vacío | Token compartido; vacío = abierto |
+| `SENTRY_DSN` | vacío | Activa el monitoreo de errores de la UI web |
+| `SENTRY_ENVIRONMENT` | vacío | Etiqueta el entorno en Sentry (p. ej. `production`) |
 | `ROSETTA_RUN_BACKEND` | auto | Fuerza `docker` o `in-process` |
 | `BROWSER_HEADLESS` | `false` | `true` para no ver la ventana del navegador |
 | `LOG_LEVEL` | `INFO` | `DEBUG` para diagnosticar |
