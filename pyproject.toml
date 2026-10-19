@@ -1,6 +1,6 @@
 [project]
 name = "Resolucion-script-rossetta"
-version = "0.1.0"
+version = "0.2.0"
 description = "Automatiza la navegación y finalización de lecciones en Rosetta Stone, con reportes de avance y cálculo de rutas óptimas de aprendizaje."
 readme = "README.md"
 license = "MIT"
