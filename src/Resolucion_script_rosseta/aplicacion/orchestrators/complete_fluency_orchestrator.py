@@ -69,6 +69,7 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         duration_calculator: Optional[FluencyDurationCalculator] = None,
         send_usage_overhead: bool = False,
         browser_completed_types: Optional[tuple] = None,
+        speech_replay_attempts: int = 2,
     ):
         super().__init__()
         self.api_port = api_port
@@ -90,6 +91,10 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         # FluencyApiPort.add_usage_overhead); off by default so an unverified
         # mutation never runs against a real account without opting in.
         self.send_usage_overhead = send_usage_overhead
+        # Re-ensayos de una conversación acreditada con bestGrade=0 (ver
+        # _repair_best_grade). Acotado: la actividad ya está acreditada y solo
+        # se intenta maquillar el listado de la lección.
+        self.speech_replay_attempts = max(0, speech_replay_attempts)
         self._state_dir = state_dir
         # Resolved in execute(), once the run knows whose account this is. A
         # single shared file would make user B skip the activities user A
@@ -419,11 +424,7 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         if not seq:
             self.logger.error("  Speech verification could not find the lesson")
             return False
-        found = None
-        for item in seq.get("activities") or []:
-            if item.get("activityId") == activity.activity_id:
-                found = item
-                break
+        found = self._activity_on_server(seq, activity.activity_id)
         if found is None:
             self.logger.error("  Speech verification could not find the activity")
             return False
@@ -435,9 +436,67 @@ class CompleteFluencyOrchestrator(OrchestratorPort):
         )
         if not complete:
             return False
+        if (found.get("bestGrade") or 0.0) <= 0.0:
+            found = await self._repair_best_grade(
+                authorization=authorization,
+                course=course,
+                seq_ref=seq_ref,
+                activity=activity,
+                found=found,
+            )
         # El id único ya está a 100%. Si el mapa cuenta una copia más, eso
         # se cierra después con `_close_map_count_gap`, no invalidando esta.
         return True
+
+    async def _repair_best_grade(
+        self, *, authorization, course, seq_ref, activity, found
+    ) -> dict:
+        """Re-ensaya la conversación cuando quedó acreditada pero sin nota.
+
+        El reproductor acredita la actividad (percentComplete=1) aunque el
+        reconocedor no diera por buena ninguna locución completa: ``bestGrade``
+        queda en 0 y el listado de la lección la cuenta como pendiente ("N de
+        N+1") aunque el bot la crea hecha. Un pase extra — con el micrófono
+        inyectando ya la respuesta entera, con todas sus locuciones — la
+        convierte en 1. Se acota: si la plataforma no coopera, la actividad
+        queda acreditada igualmente y solo se avisa.
+        """
+        for intento in range(1, self.speech_replay_attempts + 1):
+            self.logger.info(
+                "  La conversación quedó en bestGrade=0; se re-ensaya "
+                "(intento %d de %d)",
+                intento,
+                self.speech_replay_attempts,
+            )
+            replayed = await self.speech_port.complete_activity(
+                course_title=course.title,
+                lesson_title=seq_ref.title,
+                activity_id=activity.activity_id,
+                expected_steps=len(activity.steps),
+                steps=self._speech_steps(activity),
+                force=True,
+            )
+            progress = await self.api_port.get_progress(
+                authorization, course.course_id
+            )
+            seq = self._find_sequence(progress, seq_ref.sequence_id)
+            found = self._activity_on_server(seq, activity.activity_id) or found
+            grade = found.get("bestGrade") or 0.0
+            self.logger.info(
+                "  Re-ensayo %d/%d: bestGrade=%s",
+                intento,
+                self.speech_replay_attempts,
+                grade,
+            )
+            if grade > 0.0:
+                return found
+            if not replayed:
+                break
+        self.logger.warning(
+            "  La actividad quedó acreditada, pero el listado puede seguir "
+            "contándola como pendiente (bestGrade=0)"
+        )
+        return found
 
     async def _close_map_count_gap(
         self, authorization, course, seq_ref, ordered_activities

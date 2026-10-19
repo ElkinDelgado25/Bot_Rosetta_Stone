@@ -87,10 +87,10 @@ class TestStoriesOrchestrator:
         assert result.chunks_sent == 3
         assert result.failed is False
 
-    def test_opens_its_own_session_declaring_the_first_chunk_as_elapsed(self):
+    def test_opens_its_own_session_declaring_the_budget_as_elapsed(self):
         api = _Api()
         asyncio.run(_orchestrator(api=api).execute(0.5))
-        assert api.started == [("propia-1", "ENG", 600)]
+        assert api.started == [("propia-1", "ENG", 1800)]
 
     def test_reuses_the_players_session_instead_of_opening_one(self):
         api = _Api()

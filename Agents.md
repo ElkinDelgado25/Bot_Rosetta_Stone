@@ -308,6 +308,25 @@ Fluency las nombra (`"Preflight"`) y no tiene unidad. `_apply_event` guarda el
 valor tal cual; un `int()` sobre el título reventaba dentro del lock y mataba la
 ingesta entera.
 
+**La respuesta hablada son varias locuciones** — una tarjeta puede mostrar dos
+frases ("That's all right. Is there anything I can get you in the meantime?") y
+el reproductor las reproduce en cadena; el reconocedor compara contra la opción
+entera. Inyectar solo la primera locución (lo que hacía
+`_capture_choice_audio`) daba media respuesta: el paso salía "La respuesta
+grabada no coincide con las opciones", se aceptaba al reintentar por umbral —
+con `score=0` — y el diálogo quedaba acreditado pero sin nota. Ahora la captura
+devuelve **todas** las medias que suenan tras el clic (`urls`) y el micrófono
+virtual las encadena en `__rosettaFeedMicrophone`.
+
+**`bestGrade` solo cuenta el acierto a la primera** — un paso puntúa 1 únicamente
+si el reconocedor lo acepta en el primer intento; "Volver a intentar" y acertar
+graba `score=0`. `bestGrade` de la actividad es el mínimo por paso sobre todos
+los intentos: con un solo paso sin ningún `score>0` queda en 0 y la lección se
+lista "N de N+1" aunque `percentComplete` esté a 1. Por eso
+`CompleteFluencyOrchestrator._repair_best_grade` re-ensaya la actividad
+(`complete_activity(force=True)`, acotado, no fatal) cuando la verifica con
+`bestGrade=0`.
+
 **Sesión incompleta = error, no silencio** — si la fase del navegador no cosecha
 los cinco valores, ambos orquestadores lanzan `SessionCaptureIncomplete`
 (`dominio/errors.py`) en vez de avisar y volver. Antes esa ruta salía con código

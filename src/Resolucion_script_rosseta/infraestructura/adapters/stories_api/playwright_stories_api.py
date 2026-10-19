@@ -24,7 +24,11 @@ REPORT_ADDITIONAL_USAGE_URL = f"{LCP_BASE}/report_additional_usage"
 TOTALE_ORIGIN = "https://totale.rosettastone.com"
 
 APP_IDENTIFIER = "stories"
-APP_VERSION = "11.11.2"
+# Versión del cliente web, observada en vivo en su tráfico real (2026-10-16).
+# El reproductor la manda tal cual en ``report_usage``; si Rosetta despliega
+# una versión nueva, esta constante debería seguirlo para no delatar sesiones
+# de un cliente viejo.
+APP_VERSION = "11.11.3"
 
 
 class PlaywrightStoriesApiAdapter(StoriesApiPort, LoggingMixin):

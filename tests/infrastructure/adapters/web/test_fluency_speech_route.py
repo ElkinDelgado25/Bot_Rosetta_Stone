@@ -185,6 +185,27 @@ class TestRutaDeLaConversacion:
         assert _correr(espia) is True
         assert espia.elegidos == []
 
+    def test_force_replays_an_activity_the_map_already_marks_complete(self):
+        """El re-ensayo con ``force`` rejuega aunque el mapa la marque completa.
+
+        Es el caso del diálogo acreditado con bestGrade=0: para subirlo hay que
+        volver a jugarlo aunque el mapa ya lo pinte como hecho.
+        """
+        espia = _Espia(_Page(ya_completa=True), modo="elegir")
+        assert (
+            asyncio.run(
+                espia._complete_activity(
+                    course_title="Curso",
+                    lesson_title="Lección",
+                    activity_id="a1",
+                    expected_steps=3,
+                    force=True,
+                )
+            )
+            is True
+        )
+        assert espia.elegidos == [1, 2, 3]
+
     def test_una_copia_completa_no_salta_la_otra_del_mapa(self):
         """Sales Contact: el diálogo abre y cierra la lección, mismo id.
 

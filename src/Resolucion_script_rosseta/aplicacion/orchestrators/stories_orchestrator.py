@@ -12,9 +12,9 @@ La lógica, en corto:
 
 Por qué en trozos y no un POST con el total: el reproductor no manda un
 resumen al final, va reportando tramos según avanza la historia. Y por qué
-``started_ago`` vale el primer trozo: le dice al servidor que la historia
-empezó hace ese rato, en vez de nacer en el instante exacto de la primera
-llamada.
+``started_ago`` vale el presupuesto entero: le dice al servidor que la
+historia empezó hace todo ese rato, de modo que los tramos que se suman
+después caben dentro de la ventana declarada en vez de desbordarla.
 
 Un trozo rechazado corta la corrida pero no la deshace: cada POST se
 contabiliza por separado, así que lo ya acreditado sigue contando.
@@ -120,7 +120,9 @@ class StoriesOrchestrator(OrchestratorPort):
             return captured
 
         session_id = self._id_factory()
-        started_ago = chunks[0] if chunks else 0
+        # El total, no el primer trozo: la suma de los tramos debe caber en la
+        # ventana que el servidor reconstruye con ``started_ago``.
+        started_ago = sum(chunks)
         opened = await self.stories_api.start_usage_session(
             session_id, self.language, started_ago
         )

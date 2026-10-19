@@ -513,27 +513,53 @@ _VIRTUAL_MIC_SCRIPT = r"""
     };
   };
 
-  window.__rosettaFeedMicrophone = async (encodedAudio) => {
+  window.__rosettaFeedMicrophone = async (encodedAudios, leadInOverride) => {
     if (!state.context || !state.destination) {
       throw new Error("virtual microphone is not ready");
     }
+    // Una respuesta hablada puede ser VARIAS locuciones seguidas (la tarjeta
+    // muestra dos frases y el reproductor las reproduce en cadena). Con una
+    // sola se inyectaba media respuesta y el reconocedor contestaba "la
+    // respuesta grabada no coincide con las opciones". Se acepta un clip
+    // suelto o una lista, y se reproducen uno tras otro sin huecos.
+    const lista = Array.isArray(encodedAudios) ? encodedAudios : [encodedAudios];
     // El bucle de la calibración ("1, 2, 3, 4, 5") no puede seguir sonando por
     // encima de la respuesta: el reconocedor oiría las dos cosas mezcladas.
     window.__rosettaCalibrando = false;
     window.__rosettaStopMicNoise();
-    const binary = atob(encodedAudio);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-    const buffer = await state.context.decodeAudioData(bytes.buffer.slice(0));
-    const source = state.context.createBufferSource();
-    source.buffer = buffer;
-    source.__rosettaNoSpeed = true;  // nunca acelerar lo que oye el reconocedor
-    source.connect(state.bus);
+    const buffers = [];
+    for (const codificado of lista) {
+      const binary = atob(codificado);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+      buffers.push(await state.context.decodeAudioData(bytes.buffer.slice(0)));
+    }
+    // Al conectar el reconocedor a la MediaStream, sus primeros cientos de
+    // milisegundos se pierden: con el mismo audio, el primer intento salía
+    // "Volver a intentar" y el segundo entraba. El margen de 350 ms lo tapa a
+    // medias; se puede alargar sin tocar el flujo (FLUENCY_MIC_LEADIN_S).
+    const margenCrudo = Number(
+      leadInOverride === undefined || leadInOverride === null
+        ? window.__rosettaMicLeadIn
+        : leadInOverride
+    );
+    const margen = Number.isFinite(margenCrudo) && margenCrudo >= 0 ? margenCrudo : 0.35;
     window.__rosettaMicPlaybackDone = false;
-    source.onended = () => { window.__rosettaMicPlaybackDone = true; };
-    // Give the recognizer a short lead-in after it receives the MediaStream.
-    source.start(state.context.currentTime + 0.35);
-    return buffer.duration + 0.35;
+    let cursor = state.context.currentTime + margen;
+    let total = 0;
+    for (let i = 0; i < buffers.length; i += 1) {
+      const source = state.context.createBufferSource();
+      source.buffer = buffers[i];
+      source.__rosettaNoSpeed = true;  // nunca acelerar lo que oye el reconocedor
+      source.connect(state.bus);
+      source.start(cursor);
+      cursor += buffers[i].duration;
+      total += buffers[i].duration;
+      if (i === buffers.length - 1) {
+        source.onended = () => { window.__rosettaMicPlaybackDone = true; };
+      }
+    }
+    return total + margen;
   };
 })();
 """
@@ -780,6 +806,21 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         # Que el reconocedor no entienda una respuesta no es un fallo: a una
         # persona también le pasa, y el reproductor ofrece "Volver a intentar".
         self.speech_attempts = max(1, speech_attempts)
+        # El reconocedor solo puntúa con 1 el paso acertado **al primer
+        # intento**: repetir tras "Volver a intentar" resuelve el paso pero
+        # graba 0. Y la causa de los "no lo entendió" es del canal, no del
+        # audio: el mismo WAV que falla al primer inyectado entra al segundo.
+        # El margen con el que arranca el audio inyectado (350 ms) se puede
+        # alargar por env; la pausa extra va tras detectar la grabación.
+        _env_leadin = os.getenv("FLUENCY_MIC_LEADIN_S", "").strip()
+        try:
+            self.mic_leadin_s = (
+                min(5.0, max(0.0, float(_env_leadin))) if _env_leadin else 0.35
+            )
+        except ValueError:
+            self.mic_leadin_s = 0.35
+        _env_settle = os.getenv("FLUENCY_MIC_SETTLE_MS", "").strip()
+        self.mic_settle_ms = int(_env_settle) if _env_settle.isdigit() else 0
         # Ver _wait_for_recognizer: se rearma al empezar cada actividad.
         self._reconocedor_mudo = False
         # Los pasos del árbol con sus opciones (texto visible + sha del audio) y
@@ -903,6 +944,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         activity_id: str,
         expected_steps: int,
         steps: list | None = None,
+        force: bool = False,
     ) -> bool:
         """Completa la conversación, grabando la sesión si se pidió traza.
 
@@ -914,6 +956,10 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         ``steps`` son las opciones del árbol (texto visible y sha del audio por
         opción, más los ids aceptados): los pasos de cierre aceptan una sola
         respuesta y sin esto se habla una tarjeta al azar.
+
+        ``force`` salta el "ya está completa en el mapa" y la vuelve a jugar:
+        lo usa el re-ensayo cuando la actividad quedó acreditada con
+        ``bestGrade`` a cero.
         """
         await self._attach_gaia_capture()
         for intento in range(1, self.mic_retries + 2):
@@ -927,6 +973,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                     activity_id=activity_id,
                     expected_steps=expected_steps,
                     steps=steps,
+                    force=force,
                 )
                 return completed
             except _MicNeverCalibrated:
@@ -994,6 +1041,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         activity_id: str,
         expected_steps: int,
         steps: list | None = None,
+        force: bool = False,
     ) -> bool:
         self._pasos_secuencia = list(steps or [])
         try:
@@ -1017,7 +1065,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             # se queda en 16/17.
             activity = self.page.get_by_test_id(f"activity_{activity_id}")
             n_huecos = await activity.count()
-            if await complete_marker.count() and not n_huecos:
+            if not force and await complete_marker.count() and not n_huecos:
                 self.logger.info("  Speech activity already complete in lesson map")
                 return True
 
@@ -1292,6 +1340,11 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         actividad como omitida (``percentComplete`` 0 con los pasos previos
         bien contestados). Se localiza la tarjeta aceptada por su texto visible
         y, si el texto no casa, por el sha de su audio.
+
+        ``FLUENCY_SPEAK_CARD`` (``last`` o un índice 1..N) permite forzar qué
+        tarjeta se habla cuando el paso acepta cualquiera de ellas: para
+        verificar si un clip concreto del paso es el que el reconocedor no
+        entiende al primer intento se repite con otra opción.
         """
         primera = choices.first
         if not self._pasos_secuencia:
@@ -1309,7 +1362,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 textos.append(texto)
             objetivo = _opcion_objetivo(textos, self._pasos_secuencia)
             if not objetivo:
-                return primera
+                return await self._carta_forzada(choices)
             self.logger.info(
                 "  Paso con respuesta única; se habla la opción aceptada %r",
                 objetivo.get("texto"),
@@ -1323,6 +1376,51 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         except Exception as error:  # noqa: BLE001 - la primera tarjeta siempre vale
             self.logger.debug("  No se pudo elegir la tarjeta aceptada: %s", error)
         return primera
+
+    async def _carta_forzada(self, choices: Any) -> Any:
+        """La tarjeta que ``FLUENCY_SPEAK_CARD`` o ``FLUENCY_SPEAK_TEXT`` ordena.
+
+        Solo aplica a pasos donde cualquier opción vale (no se encontró un
+        objetivo único): los pasos de cierre siguen hablando la aceptada.
+        ``FLUENCY_SPEAK_TEXT`` busca por el texto visible (normalizado);
+        ``FLUENCY_SPEAK_CARD``, por posición.
+        """
+        texto_buscado = os.getenv("FLUENCY_SPEAK_TEXT", "").strip().lower()
+        crudo = os.getenv("FLUENCY_SPEAK_CARD", "").strip().lower()
+        if not texto_buscado and not crudo:
+            return choices.first
+        try:
+            total = await choices.count()
+            if texto_buscado:
+                for indice in range(total):
+                    nodo = choices.nth(indice).get_by_test_id("ChoiceText")
+                    texto = (
+                        (await nodo.first.text_content() or "").strip().lower()
+                        if await nodo.count()
+                        else ""
+                    )
+                    if texto and texto_buscado in texto:
+                        self.logger.info(
+                            "  [forzado] se habla la tarjeta %r", texto[:60]
+                        )
+                        return choices.nth(indice)
+                self.logger.warning(
+                    "  FLUENCY_SPEAK_TEXT %r no coincide con ninguna tarjeta",
+                    texto_buscado,
+                )
+                return choices.first
+            if crudo in ("last", "ultima", "última"):
+                indice = total - 1
+            else:
+                indice = int(crudo) - 1
+            if 0 <= indice < total:
+                self.logger.info(
+                    "  [forzado] se habla la tarjeta %d de %d", indice + 1, total
+                )
+                return choices.nth(indice)
+        except Exception as error:  # noqa: BLE001
+            self.logger.debug("  Tarjeta forzada no válida: %s", error)
+        return choices.first
 
     async def _tarjeta_por_sha(self, choices: Any, sha: Any) -> Any:
         """La tarjeta cuyo audio lleva ese sha, oyendo el altavoz de cada una.
@@ -1508,8 +1606,14 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
 
         return False
 
-    async def _speak_until_accepted(self, audio: bytes, step_number: int) -> bool:
+    async def _speak_until_accepted(
+        self, audio: list[bytes] | bytes, step_number: int
+    ) -> bool:
         """Dice la respuesta hasta que el reproductor la dé por buena.
+
+        ``audio`` puede ser una locución o varias (la frase de la opción y su
+        continuación, que el reproductor reproduce en cadena y el reconocedor
+        compara como un todo).
 
         Mientras el paso está sin resolver el botón de enviar solo tiene dos
         textos: **"Omitir"** (no ha oído nada) y **"Volver a intentar"** (ha
@@ -1518,6 +1622,11 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         reproductor volvía al principio y la espera del enunciado siguiente se
         agotaba a los 90 s sin que nada dijera por qué.
         """
+        clips = (
+            [bytes(audio)]
+            if isinstance(audio, (bytes, bytearray))
+            else [bytes(c) for c in audio]
+        )
         for intento in range(1, self.speech_attempts + 1):
             if intento > 1 and not await self._press_retry():
                 return False
@@ -1535,9 +1644,17 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 await self._click_speech_button()
             await self._wait_for_microphone(peticiones)
             await self._wait_until_recording()
+            if self.mic_settle_ms > 0:
+                await asyncio.sleep(self.mic_settle_ms / 1000)
             await self.page.evaluate(
-                "audio => window.__rosettaFeedMicrophone(audio)",
-                base64.b64encode(audio).decode("ascii"),
+                "({ clips, leadIn }) => { window.__rosettaMicLeadIn = leadIn; "
+                "return window.__rosettaFeedMicrophone(clips); }",
+                {
+                    "clips": [
+                        base64.b64encode(clip).decode("ascii") for clip in clips
+                    ],
+                    "leadIn": self.mic_leadin_s,
+                },
             )
             # El ``onended`` del audio inyectado es una buena señal, pero no la
             # única. En algunas conversaciones B1 el reproductor queda atado a
@@ -1570,6 +1687,12 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 )
             if veredicto == "aceptada":
                 return True
+            if os.getenv("FLUENCY_DUMP_VERDICT", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            ):
+                await self._dump_veredicto_negativo(step_number, intento)
             self.logger.info(
                 "  El reconocedor %s en el paso %d (intento %d de %d)",
                 "no oyó nada" if veredicto == "sin respuesta" else "no lo entendió",
@@ -1902,6 +2025,30 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             await self._dump_screenshot(description)
             raise
 
+    async def _dump_veredicto_negativo(self, step_number: int, intento: int) -> None:
+        """Captura y texto del reproductor cuando el reconocedor no acepta.
+
+        Diagnóstico (``FLUENCY_DUMP_VERDICT=1``): tras un "Volver a intentar"
+        el reproductor a veces pinta lo que creyó oír; el texto del paso y una
+        captura separan "oyó mal" de "no oyó nada" sin abrir la traza.
+        """
+        slug = f"rechazo_paso{step_number}_intento{intento}"
+        await self._dump_screenshot(slug)
+        try:
+            from Resolucion_script_rosseta.infraestructura.core import get_base_dir
+
+            texto = await self.page.evaluate(
+                "() => { const p = document.querySelector('[data-qa=PlayerRoot]')"
+                " || document.querySelector('main') || document.body;"
+                " return p ? (p.innerText || '').slice(0, 6000) : ''; }"
+            )
+            folder = get_base_dir() / "logs" / "diagnostics"
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / f"speech_{slug}.txt").write_text(texto or "", encoding="utf-8")
+            self.logger.info("  Texto del reproductor en speech_%s.txt", slug)
+        except Exception as error:  # noqa: BLE001 - diagnóstico, nunca hunde
+            self.logger.debug("  No se pudo volcar el texto del rechazo: %s", error)
+
     async def _dump_screenshot(self, description: str) -> None:
         try:
             from Resolucion_script_rosseta.infraestructura.core import get_base_dir
@@ -1965,6 +2112,30 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             )
             return base64.b64decode(codificado)
         return b""
+
+    async def _reference_audio_clips(self, captured: dict) -> list[bytes]:
+        """Todos los audios de la respuesta pulsada, en orden de reproducción.
+
+        La tarjeta de respuesta puede sonar en **varias locuciones seguidas**
+        (la opción muestra dos frases y el reproductor las reproduce una tras
+        otra), y el reconocedor compara contra la frase completa: inyectar solo
+        la primera acaba en "la respuesta grabada no coincide con las opciones"
+        y, con suerte, en un acierto por umbral que no cuenta. Se descargan
+        todas las medias que sonaron tras el clic; si ninguna da bytes, se cae
+        al camino de un solo cuerpo de siempre.
+        """
+        urls = list(captured.get("urls") or [])
+        if not urls and captured.get("url"):
+            urls = [captured["url"]]
+        cuerpos: list[bytes] = []
+        for url in urls:
+            descargado = await self._descargar_media(url)
+            if descargado:
+                cuerpos.append(descargado)
+        if cuerpos:
+            return cuerpos
+        cuerpo = await self._reference_audio_bytes(captured)
+        return [cuerpo] if cuerpo else []
 
     async def _descargar_media(self, url: str) -> bytes:
         """Baja una media por su URL: primero dentro de la página, luego fuera.
@@ -2775,7 +2946,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         except Exception as error:  # noqa: BLE001 - solo diagnóstico
             self.logger.debug("  No se pudo leer el audio: %s", error)
 
-    async def _capture_choice_audio(self, choice: Any) -> bytes:
+    async def _capture_choice_audio(self, choice: Any) -> list[bytes]:
         listen = choice.get_by_test_id("ListenButton")
         if await listen.count() == 0:
             # Some player versions render the speaker as a sibling while keeping
@@ -2820,18 +2991,23 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                     const esContenido = (u) =>
                         /resources\\.rosettastone\\.com|LotusAssets/.test(u || '');
                     const tras = log.filter((e) => e.t >= desde && e.u);
-                    const elegido = tras.find((e) => esContenido(e.u))
-                        || tras[0]
-                        || [...log].reverse().find((e) => esContenido(e.u))
-                        || log[log.length - 1]
-                        || null;
+                    // La tarjeta puede sonar EN VARIAS locuciones seguidas
+                    // (muestra una frase tras otra y el reproductor las
+                    // reproduce en cadena): se recogen todas, en orden.
+                    const urls = [];
+                    for (const e of tras) {
+                        if (esContenido(e.u) && !urls.includes(e.u)) urls.push(e.u);
+                    }
+                    if (!urls.length) {
+                        const ultima = [...log].reverse().find((e) => esContenido(e.u));
+                        if (ultima) urls.push(ultima.u);
+                    }
                     return {
                         ref: window.__rosettaReferenceAudio,
                         last: window.__rosettaLastPlayedAudio,
                         any: window.__rosettaAnyPlayedAudio,
-                        url: elegido
-                            ? elegido.u
-                            : (window.__rosettaReferenceAudioUrl || ''),
+                        urls: urls,
+                        url: urls[0] || (window.__rosettaReferenceAudioUrl || ''),
                         tras_clic: tras.length,
                         jugadas: window.__rosettaPlayCount || 0,
                     };
@@ -2843,11 +3019,13 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             )
 
         url = captured.get("url") or ""
+        urls = list(captured.get("urls") or [])
         jugadas = int(captured.get("jugadas") or 0)
         self.logger.info(
-            "  Captura de la respuesta: buffer=%s, url=%s, ultimo=%s, "
+            "  Captura de la respuesta: buffer=%s, urls=%d, url=%s, ultimo=%s, "
             "jugadas=%d, tras_clic=%d",
             "si" if captured.get("ref") else "no",
+            len(urls),
             (url.split("?")[0] if url else "sin-url"),
             "si" if captured.get("last") else "no",
             max(0, jugadas - jugadas_antes),
@@ -2859,8 +3037,8 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
                 "ser la del enunciado"
             )
 
-        body = await self._reference_audio_bytes(captured)
-        if not body:
+        bodies = await self._reference_audio_clips(captured)
+        if not bodies:
             raise RuntimeError("no se pudo obtener el audio de referencia")
 
         if os.getenv("FLUENCY_DUMP_MIC_AUDIO", "").strip().lower() in (
@@ -2868,7 +3046,8 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
             "true",
             "yes",
         ):
-            _volcar_audio_inyectado(body, self.logger)
+            for body in bodies:
+                _volcar_audio_inyectado(body, self.logger)
 
         # Pueden sonar **dos** altavoces a la vez (el del enunciado y el de la
         # respuesta que acabamos de pulsar). Un locator con dos coincidencias
@@ -2881,7 +3060,7 @@ class PlaywrightFluencySpeechPage(FluencySpeechPort, LoggingMixin):
         # con ninguno — y que además es lo correcto: queremos silencio, no que se
         # vaya el primero de los dos.
         await self._wait_for_all_audio_to_stop()
-        return body
+        return bodies
 
     async def _reproducciones(self) -> int:
         """Cuántas veces ha llamado el reproductor a ``HTMLMediaElement.play``.

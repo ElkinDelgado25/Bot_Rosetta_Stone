@@ -19,6 +19,7 @@ class FluencySpeechPort(ABC):
         activity_id: str,
         expected_steps: int,
         steps: Optional[List[Dict[str, Any]]] = None,
+        force: bool = False,
     ) -> bool:
         """Complete one conversation activity through the real lesson player.
 
@@ -29,5 +30,9 @@ class FluencySpeechPort(ABC):
         audio) y los ids aceptados de ``successResponses``. Los pasos de cierre
         de un diálogo aceptan una sola opción: sin este dato el bot habla una
         tarjeta al azar y el árbol se corta ahí.
+
+        ``force`` reabre la actividad aunque el mapa ya la marque completa: es
+        lo que necesita el re-ensayo cuando quedó acreditada con ``bestGrade``
+        a cero y el listado de la lección todavía la cuenta como pendiente.
         """
         ...

@@ -227,6 +227,38 @@ class _SpeechSpy:
         return self.succeeds
 
 
+class _SpeechGradeApi(_SpeechApi):
+    """percentComplete=1 con bestGrade=0 hasta que un re-ensayo forzado lo sube."""
+
+    def __init__(self, reparar=True):
+        super().__init__(complete_after=True)
+        self.reparar = reparar
+        self.reensayos = 0
+
+    async def get_progress(self, authorization, course_id):
+        rows = await super().get_progress(authorization, course_id)
+        grado = 1.0 if (self.reparar and self.reensayos) else 0.0
+        for curso in rows:
+            for seq in curso["sequences"]:
+                seq["bestGrade"] = grado
+                for act in seq["activities"]:
+                    act["bestGrade"] = grado
+        return rows
+
+
+class _SpeechGradeSpy(_SpeechSpy):
+    """Cuenta los re-ensayos forzados en la API de notas."""
+
+    def __init__(self, api):
+        super().__init__()
+        self._api = api
+
+    async def complete_activity(self, **kwargs):
+        if kwargs.get("force"):
+            self._api.reensayos += 1
+        return await super().complete_activity(**kwargs)
+
+
 class _RaisingUsageOverheadApi(_FakeApi):
     """AddUsageOverhead es telemetría: si revienta, la lección ya está enviada."""
 
@@ -667,4 +699,53 @@ class TestCompleteFluencyOrchestrator:
             }]
         }
         assert orch._pending_lessons(catalog, progress) == []
+
+    def test_speech_activity_with_zero_grade_is_replayed_once(self, tmp_path):
+        """pct=1 con bestGrade=0: un re-ensayo forzado lo levanta a 1.
+
+        Es la forma en la que quedaba un diálogo cuando el reconocedor no daba
+        por buena ninguna locución: acreditado (percentComplete=1), pero el
+        listado de la lección lo seguía contando como pendiente ("N de N+1").
+        """
+        api = _SpeechGradeApi()
+        speech = _SpeechGradeSpy(api)
+        orch = CompleteFluencyOrchestrator(
+            api_port=api,
+            speech_port=speech,
+            state_dir=tmp_path,
+            max_lessons=None,
+        )
+
+        _run(orch)
+
+        assert [c.get("force") for c in speech.calls] == [None, True]
+        assert api.reensayos == 1
+        from Resolucion_script_rosseta.infraestructura.state import RunProgressState
+
+        state = RunProgressState(tmp_path / "fluency_u1.json")
+        assert state.is_done(fluency_activity_key("c1", "seq-a", "voice-a"))
+
+    def test_speech_replay_is_bounded_and_not_fatal(self, tmp_path):
+        """Si la nota no sube, se avisa y la actividad queda acreditada igual.
+
+        La actividad ya está a 100%: quedarse sin re-ensayos no puede tumbar
+        la lección ni dejarla marcada como fallida en bucle.
+        """
+        api = _SpeechGradeApi(reparar=False)
+        speech = _SpeechGradeSpy(api)
+        orch = CompleteFluencyOrchestrator(
+            api_port=api,
+            speech_port=speech,
+            state_dir=tmp_path,
+            max_lessons=None,
+            speech_replay_attempts=2,
+        )
+
+        _run(orch)
+
+        assert [c.get("force") for c in speech.calls] == [None, True, True]
+        from Resolucion_script_rosseta.infraestructura.state import RunProgressState
+
+        state = RunProgressState(tmp_path / "fluency_u1.json")
+        assert state.is_done(fluency_activity_key("c1", "seq-a", "voice-a"))
 
